@@ -1,6 +1,12 @@
 // M5StickC Nixie tube Clock: 2019.06.06 
 #include <M5StickCPlus.h>
 
+#include "mercator_secrets.c"
+
+// Nixie Clock graphics files
+#include "vfd_18x34.c"
+#include "vfd_35x67.c"
+
 #define SCREEN_LENGTH 240
 #define SCREEN_WIDTH 135
 
@@ -23,11 +29,6 @@ uint16_t sideCount = 0, topCount = 0;
 #include <AsyncTCP.h>           // OTA updates
 #include <ESPAsyncWebServer.h>  // OTA updates
 #include <AsyncElegantOTA.h>    // OTA updates
-
-#include "mercator_secrets.c"
-
-#include "vfd_18x34.c"
-#include "vfd_35x67.c"
 
 AsyncWebServer asyncWebServer(80);      // OTA updates
 const bool enableOTAServer=false; // OTA updates
