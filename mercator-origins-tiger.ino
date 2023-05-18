@@ -8,20 +8,19 @@
 #include "vfd_18x34.c"
 #include "vfd_35x67.c"
 
-#define SCREEN_LENGTH 240
-#define SCREEN_WIDTH 135
+const int SCREEN_LENGTH = 240;
+const int SCREEN_WIDTH = 135;
 
-#define BUTTON_REED_TOP_PIN 0
-#define BUTTON_REED_SIDE_PIN 25
-#define UNUSED_GPIO_36_PIN 36
-#define M5_POWER_SWITCH_PIN 255
-#define DEBOUNCE_MS 10
+const uint8_t BUTTON_REED_TOP_PIN=0;
+const uint8_t BUTTON_REED_SIDE_PIN=25;
+const uint8_t UNUSED_GPIO_36_PIN=36;
+const uint8_t M5_POWER_SWITCH_PIN=255;
+const uint32_t MERCATOR_DEBOUNCE_MS=10;
+const uint32_t PENETRATOR_LEAK_DETECTOR_PIN=26;
 
-#define PENETRATOR_LEAK_DETECTOR_PIN 26
-
-Button ReedSwitchGoProTop = Button(BUTTON_REED_TOP_PIN, true, DEBOUNCE_MS);    // from utility/Button.h for M5 Stick C Plus
-Button ReedSwitchGoProSide = Button(BUTTON_REED_SIDE_PIN, true, DEBOUNCE_MS); // from utility/Button.h for M5 Stick C Plus
-Button LeakDetectorSwitch = Button(PENETRATOR_LEAK_DETECTOR_PIN, true, DEBOUNCE_MS); // from utility/Button.h for M5 Stick C Plus
+Button ReedSwitchGoProTop = Button(BUTTON_REED_TOP_PIN, true, MERCATOR_DEBOUNCE_MS);    // from utility/Button.h for M5 Stick C Plus
+Button ReedSwitchGoProSide = Button(BUTTON_REED_SIDE_PIN, true, MERCATOR_DEBOUNCE_MS); // from utility/Button.h for M5 Stick C Plus
+Button LeakDetectorSwitch = Button(PENETRATOR_LEAK_DETECTOR_PIN, true, MERCATOR_DEBOUNCE_MS); // from utility/Button.h for M5 Stick C Plus
 uint16_t sideCount = 0, topCount = 0;
 
 #include <WiFi.h>
