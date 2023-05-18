@@ -16,7 +16,7 @@ const uint8_t BUTTON_REED_SIDE_PIN=25;
 const uint8_t UNUSED_GPIO_36_PIN=36;
 const uint8_t M5_POWER_SWITCH_PIN=255;
 const uint32_t MERCATOR_DEBOUNCE_MS=10;
-const uint32_t PENETRATOR_LEAK_DETECTOR_PIN=26;
+const uint8_t PENETRATOR_LEAK_DETECTOR_PIN=26;
 
 Button ReedSwitchGoProTop = Button(BUTTON_REED_TOP_PIN, true, MERCATOR_DEBOUNCE_MS);    // from utility/Button.h for M5 Stick C Plus
 Button ReedSwitchGoProSide = Button(BUTTON_REED_SIDE_PIN, true, MERCATOR_DEBOUNCE_MS); // from utility/Button.h for M5 Stick C Plus
