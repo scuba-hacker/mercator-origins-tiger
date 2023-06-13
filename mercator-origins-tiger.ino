@@ -11,8 +11,8 @@
 const int SCREEN_LENGTH = 240;
 const int SCREEN_WIDTH = 135;
 
-const uint8_t BUTTON_REED_TOP_PIN=0;
-const uint8_t BUTTON_REED_SIDE_PIN=25;
+const uint8_t BUTTON_REED_TOP_PIN=25;
+const uint8_t BUTTON_REED_SIDE_PIN=0;
 const uint8_t UNUSED_GPIO_36_PIN=36;
 const uint8_t M5_POWER_SWITCH_PIN=255;
 const uint32_t MERCATOR_DEBOUNCE_MS=10;
@@ -31,8 +31,8 @@ uint16_t sideCount = 0, topCount = 0;
 #include <AsyncElegantOTA.h>    // OTA updates
 
 AsyncWebServer asyncWebServer(80);      // OTA updates
-const bool enableOTAServer=false; // OTA updates
-bool otaActiveListening=false;   // OTA updates toggle
+const bool enableOTAServer=true; // OTA updates
+bool otaActiveListening=true;   // OTA updates toggle
 
 Button* p_primaryButton = NULL;
 Button* p_secondButton = NULL;
@@ -274,7 +274,6 @@ void setup()
   // force BST for now, so shows right time even when not online
   // force Gozo time for now.
   daylightOffset_sec = 3600; // BST
-  daylightOffset_sec = 7200; // Gozo
    
   M5.begin();
 
@@ -501,6 +500,8 @@ void loop(void)
   if ( mode_ == 2 ){ vfd_2_line();}   // yyyy,mm,dd,hh,mm,ss - not used.
   if ( mode_ == 1 ){ vfd_1_line_countup();}   // mm,ss, optional dd mm
 
+//  readAndTestGoProReedSwitches();
+  
   for (int m=0;m<10;m++)
   {
     delay(50);
@@ -741,7 +742,7 @@ bool setupOTAWebServer(const char* _ssid, const char* _password, const char* lab
       M5.Lcd.print("No Connection");
   }
 
-  delay(1000);
+  delay(5000);
 
   M5.Lcd.fillScreen(TFT_BLACK);
 
