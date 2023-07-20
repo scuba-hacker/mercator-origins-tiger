@@ -564,17 +564,6 @@ void vfd_3_line_clock(){    // Clock mode - Hours, mins, secs with optional date
   int i2 = int(RTC_TimeStruct.Minutes - i1*10 );
   int s1 = int(RTC_TimeStruct.Seconds / 10 );
   int s2 = int(RTC_TimeStruct.Seconds - s1*10 );
-  
-  M5.Lcd.pushImage(  2,0,35,67, (uint16_t *)m[h1]);
-  M5.Lcd.pushImage( 41,0,35,67, (uint16_t *)m[h2]);
-  M5.Lcd.drawPixel( 79,22, ORANGE); M5.Lcd.drawPixel( 79,48,ORANGE); 
-  M5.Lcd.drawPixel( 79,21, YELLOW); M5.Lcd.drawPixel( 79,47,YELLOW); 
-  M5.Lcd.pushImage( 83,0,35,67, (uint16_t *)m[i1]);
-  M5.Lcd.pushImage(121,0,35,67, (uint16_t *)m[i2]);
-  M5.Lcd.pushImage(120,45,18,34, (uint16_t *)n[s1]);
-  M5.Lcd.pushImage(140,45,18,34, (uint16_t *)n[s2]);
-
-  drawDate();
 
   // print current and voltage of USB
   if (showPowerStats)
@@ -583,6 +572,19 @@ void vfd_3_line_clock(){    // Clock mode - Hours, mins, secs with optional date
     M5.Lcd.printf("USB %.1fV, %.0fma\n",  M5.Axp.GetVBusVoltage(),M5.Axp.GetVBusCurrent());
     M5.Lcd.printf("Batt Charge %.0fma\n",  M5.Axp.GetBatChargeCurrent());
     M5.Lcd.printf("Batt %.1fV %.0fma\n",  M5.Axp.GetBatVoltage(), M5.Axp.GetBatCurrent());
+  }
+  else
+  {
+    M5.Lcd.pushImage(  2,0,35,67, (uint16_t *)m[h1]);
+    M5.Lcd.pushImage( 41,0,35,67, (uint16_t *)m[h2]);
+    M5.Lcd.drawPixel( 79,22, ORANGE); M5.Lcd.drawPixel( 79,48,ORANGE); 
+    M5.Lcd.drawPixel( 79,21, YELLOW); M5.Lcd.drawPixel( 79,47,YELLOW); 
+    M5.Lcd.pushImage( 83,0,35,67, (uint16_t *)m[i1]);
+    M5.Lcd.pushImage(121,0,35,67, (uint16_t *)m[i2]);
+    M5.Lcd.pushImage(120,45,18,34, (uint16_t *)n[s1]);
+    M5.Lcd.pushImage(140,45,18,34, (uint16_t *)n[s2]);
+  
+    drawDate();
   }
    
   if ( s1 == 0 && s2 == 0 ){ fade();}
