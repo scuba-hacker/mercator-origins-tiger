@@ -31,11 +31,16 @@ uint16_t sideCount = 0, topCount = 0;
 #include <AsyncElegantOTA.h>    // OTA updates
 
 AsyncWebServer asyncWebServer(80);      // OTA updates
-const bool enableOTAServer=true; // OTA updates
+const bool enableOTAServer=false; // OTA updates
 bool otaActiveListening=true;   // OTA updates toggle
 
 Button* p_primaryButton = NULL;
 Button* p_secondButton = NULL;
+
+bool primaryButtonIsPressed = false;
+uint32_t primaryButtonPressedTime = 0;
+bool secondButtonIsPressed = false;
+uint32_t secondButtonPressedTime = 0;
 
 const char* ntpServer = "pool.ntp.org";
 const long  gmtOffset_sec = 0;        // timezone offset
@@ -70,7 +75,7 @@ const int defaultBrightness = 15;
 
 int countdownFrom=59;
 bool haltCountdown=false;
-bool showDate=true;
+bool showDate=true;  // 
 
 bool showPowerStats=false;
 
@@ -82,7 +87,7 @@ void resetCountUpTimer();
 
 const float minimumUSBVoltage=2.0;
 long USBVoltageDropTime=0;
-long milliSecondsToWaitForShutDown=3000;
+long milliSecondsToWaitForShutDown=1000;
 
 bool setupOTAWebServer(const char* _ssid, const char* _password, const char* label, uint32_t timeout);
 
@@ -163,41 +168,69 @@ void shutdownIfUSBPowerOff()
 void  initialiseRTCfromNTP()
 {
   M5.Lcd.fillScreen(BLACK);
-  M5.Lcd.setCursor(20,50);
-
-  int maxAttempts=50;
+  M5.Lcd.setCursor(0,0);
 
   if (!enableOTAServer)
   {
     //connect to WiFi
-    Serial.printf("Connect to %s ", ssid_1);
-    M5.Lcd.printf("Connect to\n    %s\n", ssid_1);
+    M5.Lcd.printf("Connect to\n%s\n", label_1);
+    int maxAttempts=15;
     WiFi.begin(ssid_1, password_1);
-    while (WiFi.status() != WL_CONNECTED && --maxAttempts) {
-        delay(300);
-        Serial.print(".");
-        M5.Lcd.print(".");
+    while (WiFi.status() != WL_CONNECTED && --maxAttempts) 
+    {
+      delay(300);
+      M5.Lcd.print(".");
+    }
+
+    if (maxAttempts == 0 && WiFi.status() != WL_CONNECTED)
+    {
+      M5.Lcd.fillScreen(BLACK);
+      M5.Lcd.setCursor(0,0);
+      
+      M5.Lcd.printf("Connect to\n%s\n", label_2);
+      int maxAttempts=15;
+      WiFi.begin(ssid_2, password_2);
+      while (WiFi.status() != WL_CONNECTED && --maxAttempts) 
+      {
+          delay(300);
+          M5.Lcd.print(".");
+      }
+    }
+
+    if (maxAttempts == 0 && WiFi.status() != WL_CONNECTED)
+    {
+      M5.Lcd.fillScreen(BLACK);
+      M5.Lcd.printf("Connect to\n%s\n", label_3);
+      M5.Lcd.setCursor(0,0);
+      int maxAttempts=15;
+      WiFi.begin(ssid_3, password_3);
+      while (WiFi.status() != WL_CONNECTED && --maxAttempts) 
+      {
+          delay(300);
+          M5.Lcd.print(".");
+      }
     }
   }
-    
-  if (maxAttempts)
+
+  if (WiFi.status() == WL_CONNECTED)
   {
-    Serial.println(" OK");
-    M5.Lcd.print(" OK");
+    M5.Lcd.println("Wifi OK");
   
     //init and get the time
     _initialiseTimeFromNTP:
     configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
 
     struct tm timeinfo;
-    if(!getLocalTime(&timeinfo)){
+    if(!getLocalTime(&timeinfo))
+    {
       Serial.println("No time available (yet)");
       // Let RTC continue with existing settings
+      M5.Lcd.println("Wait for NTP Time\n");
       delay(1000);
     }
     else
     {
-      Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
+      // Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
       // Use NTP to update RTC
     
       RTC_TimeTypeDef TimeStruct;
@@ -213,9 +246,9 @@ void  initialiseRTCfromNTP()
       DateStruct.WeekDay = timeinfo.tm_wday;
       M5.Rtc.SetData(&DateStruct);    
       if (daylightOffset_sec == 0)
-        M5.Lcd.println("\n RTC to GMT");
+        M5.Lcd.println("RTC to GMT");
       else
-        M5.Lcd.println("\n RTC to BST");
+        M5.Lcd.println("RTC set to BST");
   
       delay(300);
     }
@@ -254,6 +287,7 @@ void  initialiseRTCfromNTP()
         //disconnect WiFi as it's no longer needed
         WiFi.disconnect(true);
         WiFi.mode(WIFI_OFF);
+        M5.Lcd.println("WiFi Off");
     }
   }
   else
@@ -303,6 +337,8 @@ void setup()
       if (!setupOTAWebServer(ssid_1, password_1, label_1, timeout_1))
         if (!setupOTAWebServer(ssid_2, password_2, label_2, timeout_2))
           setupOTAWebServer(ssid_3, password_3, label_3, timeout_3);
+
+      M5.Lcd.setRotation(1);
   }
 
   initialiseRTCfromNTP();
@@ -438,12 +474,50 @@ bool checkReedSwitches()
     
   updateButtonsAndBuzzer();
 
+  const int pressedPrimaryButtonX = 210;
+  const int pressedPrimaryButtonY = 5;
+
+  const int pressedSecondButtonX = 210;
+  const int pressedSecondButtonY = 110;
+  
+  if (primaryButtonIsPressed)
+  {
+    M5.Lcd.setTextSize(3);
+    M5.Lcd.setTextColor(TFT_WHITE, TFT_RED);
+    M5.Lcd.setCursor(pressedPrimaryButtonX,pressedPrimaryButtonY);
+    M5.Lcd.printf("%i",(millis()-primaryButtonPressedTime)/1000);
+    M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+  }
+  else
+  {
+    M5.Lcd.setTextSize(3);
+    M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+    M5.Lcd.setCursor(pressedPrimaryButtonX,pressedPrimaryButtonY);
+    M5.Lcd.print(" ");
+  }
+  
+  if (secondButtonIsPressed)
+  {
+    M5.Lcd.setTextSize(3);
+    M5.Lcd.setTextColor(TFT_WHITE, TFT_BLUE);
+    M5.Lcd.setCursor(pressedSecondButtonX,pressedSecondButtonY);
+    M5.Lcd.printf("%i",(millis()-secondButtonPressedTime)/1000);
+    M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+  }
+  else
+  {
+    M5.Lcd.setTextSize(3);
+    M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+    M5.Lcd.setCursor(pressedSecondButtonX,pressedSecondButtonY);
+    M5.Lcd.print(" ");
+  }
+
   if (p_primaryButton->wasReleasefor(100))
   {
     // Screen cycle command
     if (mode_ == 4) // countdown mode, next is clock
     {
-      resetClock();
+      resetClock(); changeMade = true;
     }
     else if (mode_ == 3) // clock mode, next is timer
     {
@@ -455,7 +529,32 @@ bool checkReedSwitches()
     }
   }
 
-  if (p_secondButton->wasReleasefor(100))
+  // press second button for 5 seconds to attempt WiFi connect and enable OTA
+  if (p_secondButton->wasReleasefor(5000))
+  { 
+    // enable OTA
+    if (!setupOTAWebServer(ssid_1, password_1, label_1, timeout_1))
+      if (!setupOTAWebServer(ssid_2, password_2, label_2, timeout_2))
+        setupOTAWebServer(ssid_3, password_3, label_3, timeout_3);
+
+    M5.Lcd.setRotation(1);
+ 
+    changeMade = true;
+  }
+  // press second button for 1 second...
+  else if (p_secondButton->wasReleasefor(1000))
+  {
+    // Screen modification command
+    if (mode_ == 4)       // Countdown mode, reduce timer by 15 mins
+    {
+      countdownFrom=countdownFrom-15;
+      if (countdownFrom <= 0)
+        countdownFrom = 59;
+      changeMade = true;
+    }
+  }
+  // press second button for 0.1 second...
+  else if (p_secondButton->wasReleasefor(100))
   {
     // Screen reset command
     if (mode_ == 4)
@@ -471,22 +570,10 @@ bool checkReedSwitches()
     else if (mode_ == 3) // clock mode
     {
       showDate=!showDate; changeMade = true;
+      
       M5.Lcd.fillScreen(BLACK);
     }
   }
-  
-  if (p_secondButton->wasReleasefor(1000))
-  {
-    // Screen modification command
-    if (mode_ == 4)       // Countdown mode, reduce timer by 15 mins
-    {
-      countdownFrom=countdownFrom-15;
-      if (countdownFrom <= 0)
-        countdownFrom = 59;
-      changeMade = true;
-    }
-  }
-
   return changeMade;
 }
 
@@ -508,7 +595,7 @@ void loop(void)
     checkForLeak(leakAlarmMsg,PENETRATOR_LEAK_DETECTOR_PIN);
     
     if (checkReedSwitches()) // If a change occurred break out of wait loop to make change asap.
-    {    
+    {
       break;
     }
   }
@@ -757,4 +844,38 @@ void updateButtonsAndBuzzer()
   p_secondButton->read();
   LeakDetectorSwitch.read();
   M5.Beep.update();
+
+  if (p_primaryButton->isPressed())
+  {
+    if (!primaryButtonIsPressed)
+    {
+      primaryButtonIsPressed=true;
+      primaryButtonPressedTime=millis();
+    }
+  }
+  else
+  {
+    if (primaryButtonIsPressed)
+    {
+      primaryButtonIsPressed=false;
+      primaryButtonPressedTime=0;
+    }
+  }
+
+  if (p_secondButton->isPressed())
+  {
+    if (!secondButtonIsPressed)
+    {
+      secondButtonIsPressed=true;
+      secondButtonPressedTime=millis();
+    }
+  }
+  else
+  {
+    if (secondButtonIsPressed)
+    {
+      secondButtonIsPressed=false;
+      secondButtonPressedTime=0;
+    }
+  }
 }
