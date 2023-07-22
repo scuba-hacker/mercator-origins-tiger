@@ -11,6 +11,8 @@
 const int SCREEN_LENGTH = 240;
 const int SCREEN_WIDTH = 135;
 
+bool landscape_clock = false;
+
 const uint8_t BUTTON_REED_TOP_PIN=25;
 const uint8_t BUTTON_REED_SIDE_PIN=0;
 const uint8_t UNUSED_GPIO_36_PIN=36;
@@ -92,6 +94,14 @@ long milliSecondsToWaitForShutDown=1000;
 bool setupOTAWebServer(const char* _ssid, const char* _password, const char* label, uint32_t timeout);
 
 void updateButtonsAndBuzzer();
+
+void setRotationForClockStyle()
+{
+  if (landscape_clock)
+    M5.Lcd.setRotation(1);
+  else
+    M5.Lcd.setRotation(0);
+}
 
 void toggleOTAActiveAndWifiIfUSBPowerOff()
 {
@@ -296,7 +306,8 @@ void  initialiseRTCfromNTP()
   }
 
   M5.Lcd.fillScreen(BLACK);
-  M5.Lcd.setRotation(1);
+  
+  setRotationForClockStyle();
 
   resetClock();
 }
@@ -326,7 +337,8 @@ void setup()
     
   M5.Beep.setBeep(1200, 100);
 
-  M5.Lcd.setRotation(1);
+  setRotationForClockStyle();
+
   M5.Lcd.setTextSize(2);
   M5.Axp.ScreenBreath(defaultBrightness);             // 7-15
   
@@ -334,11 +346,11 @@ void setup()
 
   if (enableOTAServer)
   {
-      if (!setupOTAWebServer(ssid_1, password_1, label_1, timeout_1))
-        if (!setupOTAWebServer(ssid_2, password_2, label_2, timeout_2))
-          setupOTAWebServer(ssid_3, password_3, label_3, timeout_3);
+    if (!setupOTAWebServer(ssid_1, password_1, label_1, timeout_1))
+      if (!setupOTAWebServer(ssid_2, password_2, label_2, timeout_2))
+        setupOTAWebServer(ssid_3, password_3, label_3, timeout_3);
 
-      M5.Lcd.setRotation(1);
+    setRotationForClockStyle();
   }
 
   initialiseRTCfromNTP();
@@ -474,12 +486,26 @@ bool checkReedSwitches()
     
   updateButtonsAndBuzzer();
 
-  const int pressedPrimaryButtonX = 210;
-  const int pressedPrimaryButtonY = 5;
+  int pressedPrimaryButtonX, pressedPrimaryButtonY, pressedSecondButtonX, pressedSecondButtonY;
 
-  const int pressedSecondButtonX = 210;
-  const int pressedSecondButtonY = 110;
+  if (landscape_clock)
+  {   
+    pressedPrimaryButtonX = 210;
+    pressedPrimaryButtonY = 5;
   
+    pressedSecondButtonX = 210;
+    pressedSecondButtonY = 110;
+  }
+  else
+  {   
+    pressedPrimaryButtonX = 110;
+    pressedPrimaryButtonY = 5; 
+  
+    pressedSecondButtonX = 5;
+    pressedSecondButtonY = 210;
+  }
+  
+    
   if (primaryButtonIsPressed)
   {
     M5.Lcd.setTextSize(3);
@@ -537,7 +563,7 @@ bool checkReedSwitches()
       if (!setupOTAWebServer(ssid_2, password_2, label_2, timeout_2))
         setupOTAWebServer(ssid_3, password_3, label_3, timeout_3);
 
-    M5.Lcd.setRotation(1);
+    setRotationForClockStyle();
  
     changeMade = true;
   }
@@ -615,14 +641,16 @@ void vfd_4_line_countdown(const int countdownFrom){ // Countdown mode, minutes, 
     int i2 = int(minutesRemaining - i1*10 );
     int s1 = int(secondsRemaining / 10 );
     int s2 = int(secondsRemaining - s1*10 );
-    
+
+    draw_digit_images(i1, i2, s1, s2, -1, -1);
+/*
     M5.Lcd.pushImage(  2,6,35,67, (uint16_t *)m[i1]);
     M5.Lcd.pushImage( 41,6,35,67, (uint16_t *)m[i2]);
     M5.Lcd.drawPixel( 79,28, ORANGE); M5.Lcd.drawPixel( 79,54,ORANGE); 
     M5.Lcd.drawPixel( 79,27, YELLOW); M5.Lcd.drawPixel( 79,53,YELLOW); 
     M5.Lcd.pushImage( 83,6,35,67, (uint16_t *)m[s1]);
     M5.Lcd.pushImage(121,6,35,67, (uint16_t *)m[s2]);
-
+*/
     drawDate();
 
     if ( s1 == 0 && s2 == 0 ){ fade();}
@@ -641,7 +669,39 @@ void vfd_4_line_countdown(const int countdownFrom){ // Countdown mode, minutes, 
     fade();
   }  
 }
- 
+
+void draw_digit_images(int h1, int h2, int i1, int i2, int s1, int s2)
+{
+  if (landscape_clock)
+  {
+    M5.Lcd.pushImage(  2,0,35,67, (uint16_t *)m[h1]);
+    M5.Lcd.pushImage( 41,0,35,67, (uint16_t *)m[h2]);
+    M5.Lcd.drawPixel( 79,22, ORANGE); M5.Lcd.drawPixel( 79,48,ORANGE); 
+    M5.Lcd.drawPixel( 79,21, YELLOW); M5.Lcd.drawPixel( 79,47,YELLOW); 
+    M5.Lcd.pushImage( 83,0,35,67, (uint16_t *)m[i1]);
+    M5.Lcd.pushImage(121,0,35,67, (uint16_t *)m[i2]);
+    if (s1 != -1 && s2 != -1)
+    {
+      M5.Lcd.pushImage(120,45,18,34, (uint16_t *)n[s1]);
+      M5.Lcd.pushImage(140,45,18,34, (uint16_t *)n[s2]);
+    }
+  }
+  else
+  {
+    M5.Lcd.pushImage(  2,0,35,67, (uint16_t *)m[h1]);
+    M5.Lcd.pushImage( 41,0,35,67, (uint16_t *)m[h2]);
+    M5.Lcd.drawPixel( 79,22, ORANGE); M5.Lcd.drawPixel( 79,48,ORANGE);
+    M5.Lcd.drawPixel( 79,21, YELLOW); M5.Lcd.drawPixel( 79,47,YELLOW); 
+    M5.Lcd.pushImage( 2,70,35,67, (uint16_t *)m[i1]);
+    M5.Lcd.pushImage(41,70,35,67, (uint16_t *)m[i2]);
+    if (s1 != -1 && s2 != -1)
+    {
+      M5.Lcd.pushImage(39,115,18,34, (uint16_t *)n[s1]);
+      M5.Lcd.pushImage(60,115,18,34, (uint16_t *)n[s2]);
+    }
+  }
+}
+
 void vfd_3_line_clock(){    // Clock mode - Hours, mins, secs with optional date
   M5.Rtc.GetTime(&RTC_TimeStruct);
   M5.Rtc.GetData(&RTC_DateStruct);
@@ -662,15 +722,8 @@ void vfd_3_line_clock(){    // Clock mode - Hours, mins, secs with optional date
   }
   else
   {
-    M5.Lcd.pushImage(  2,0,35,67, (uint16_t *)m[h1]);
-    M5.Lcd.pushImage( 41,0,35,67, (uint16_t *)m[h2]);
-    M5.Lcd.drawPixel( 79,22, ORANGE); M5.Lcd.drawPixel( 79,48,ORANGE); 
-    M5.Lcd.drawPixel( 79,21, YELLOW); M5.Lcd.drawPixel( 79,47,YELLOW); 
-    M5.Lcd.pushImage( 83,0,35,67, (uint16_t *)m[i1]);
-    M5.Lcd.pushImage(121,0,35,67, (uint16_t *)m[i2]);
-    M5.Lcd.pushImage(120,45,18,34, (uint16_t *)n[s1]);
-    M5.Lcd.pushImage(140,45,18,34, (uint16_t *)n[s2]);
-  
+    draw_digit_images(h1, h2, i1, i2, s1, s2);
+
     drawDate();
   }
    
@@ -685,12 +738,7 @@ void vfd_1_line_countup(){  // Timer Mode - Minutes and Seconds, with optional d
   int s1 = int(RTC_TimeStruct.Seconds / 10 );
   int s2 = int(RTC_TimeStruct.Seconds - s1*10 );
   
-  M5.Lcd.pushImage(  2,6,35,67, (uint16_t *)m[i1]);
-  M5.Lcd.pushImage( 41,6,35,67, (uint16_t *)m[i2]);
-  M5.Lcd.drawPixel( 79,28, ORANGE); M5.Lcd.drawPixel( 79,54,ORANGE); 
-  M5.Lcd.drawPixel( 79,27, YELLOW); M5.Lcd.drawPixel( 79,53,YELLOW); 
-  M5.Lcd.pushImage( 83,6,35,67, (uint16_t *)m[s1]);
-  M5.Lcd.pushImage(121,6,35,67, (uint16_t *)m[s2]);
+  draw_digit_images(i1, i2, s1, s2, -1, -1);
 
   drawDate();
 
@@ -705,11 +753,21 @@ void drawDate()
     int j2 = int(RTC_DateStruct.Month   - j1*10 );
     int d1 = int(RTC_DateStruct.Date    / 10 );
     int d2 = int(RTC_DateStruct.Date    - d1*10 );
-  
-    M5.Lcd.pushImage(35, 75,18,34, (uint16_t *)n[d1]);
-    M5.Lcd.pushImage(54, 75,18,34, (uint16_t *)n[d2]);
-    M5.Lcd.pushImage(85, 75 ,18,34, (uint16_t *)n[j1]);
-    M5.Lcd.pushImage(105, 75,18,34, (uint16_t *)n[j2]);
+
+    if (landscape_clock)
+    {
+      M5.Lcd.pushImage(35, 75,18,34, (uint16_t *)n[d1]);
+      M5.Lcd.pushImage(54, 75,18,34, (uint16_t *)n[d2]);
+      M5.Lcd.pushImage(85, 75 ,18,34, (uint16_t *)n[j1]);
+      M5.Lcd.pushImage(105, 75,18,34, (uint16_t *)n[j2]);
+    }
+    else
+    {
+//      M5.Lcd.pushImage(35, 75,18,34, (uint16_t *)n[d1]);
+//     M5.Lcd.pushImage(54, 75,18,34, (uint16_t *)n[d2]);
+//      M5.Lcd.pushImage(85, 75 ,18,34, (uint16_t *)n[j1]);
+//      M5.Lcd.pushImage(105, 75,18,34, (uint16_t *)n[j2]);
+    }
   }
 }
 
@@ -802,7 +860,8 @@ bool setupOTAWebServer(const char* _ssid, const char* _password, const char* lab
     });
 
     AsyncElegantOTA.begin(&asyncWebServer);    // Start AsyncElegantOTA
-    asyncWebServer.begin();    M5.Lcd.setRotation(0);
+    asyncWebServer.begin();    
+    M5.Lcd.setRotation(0);
     
     M5.Lcd.fillScreen(TFT_BLACK);
     M5.Lcd.setCursor(0,155);
