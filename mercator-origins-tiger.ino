@@ -13,6 +13,8 @@ const int SCREEN_WIDTH = 135;
 
 bool landscape_clock = false;
 
+bool text_clock = true;
+
 const uint8_t BUTTON_REED_TOP_PIN=25;
 const uint8_t BUTTON_REED_SIDE_PIN=0;
 const uint8_t UNUSED_GPIO_36_PIN=36;
@@ -642,7 +644,7 @@ void vfd_4_line_countdown(const int countdownFrom){ // Countdown mode, minutes, 
     int s1 = int(secondsRemaining / 10 );
     int s2 = int(secondsRemaining - s1*10 );
 
-    draw_digit_images(i1, i2, s1, s2, -1, -1);
+    draw_digits(i1, i2, s1, s2, -1, -1);
 /*
     M5.Lcd.pushImage(  2,6,35,67, (uint16_t *)m[i1]);
     M5.Lcd.pushImage( 41,6,35,67, (uint16_t *)m[i2]);
@@ -668,6 +670,53 @@ void vfd_4_line_countdown(const int countdownFrom){ // Countdown mode, minutes, 
     fade();
     fade();
   }  
+}
+
+void draw_digits(int h1, int h2, int i1, int i2, int s1, int s2)
+{
+  if (text_clock)
+    draw_digit_text(h1,h2,i1,i2,s1,s2);
+  else
+    draw_digit_images(h1,h2,i1,i2,s1,s2);
+}
+
+
+void draw_digit_text(int h1, int h2, int i1, int i2, int s1, int s2)
+{
+  M5.Lcd.setTextSize(9);
+  M5.Lcd.setTextFont(0);
+  M5.Lcd.setTextColor(TFT_ORANGE,TFT_BLACK);
+
+  if (landscape_clock)
+  {
+    M5.Lcd.setCursor(0,5);
+    M5.Lcd.printf(" %i%i:%i%i",h1,h2,i1,i2);
+    if (s1 != -1 && s2 != -1)
+    {
+      M5.Lcd.setTextSize(4);
+      M5.Lcd.setCursor(50,50);
+      M5.Lcd.printf("%i%i",s1,s2);
+    }
+  }
+  else
+  {
+    M5.Lcd.setCursor(5,5);
+    M5.Lcd.printf("%i%i",h1,h2);
+
+    M5.Lcd.setTextColor(TFT_ORANGE);
+    M5.Lcd.setCursor(M5.Lcd.getCursorX()-10,M5.Lcd.getCursorY());
+    M5.Lcd.printf(":\n",h1,h2);
+    M5.Lcd.setTextColor(TFT_ORANGE,TFT_BLACK);
+    M5.Lcd.setCursor(M5.Lcd.getCursorX()+5,M5.Lcd.getCursorY());
+    M5.Lcd.printf("%i%i",i1,i2);
+    
+    if (s1 != -1 && s2 != -1)
+    {
+      M5.Lcd.setTextSize(4);
+      M5.Lcd.setCursor(50,120);
+      M5.Lcd.printf("%i%i",s1,s2);
+    }
+  }
 }
 
 void draw_digit_images(int h1, int h2, int i1, int i2, int s1, int s2)
@@ -722,7 +771,7 @@ void vfd_3_line_clock(){    // Clock mode - Hours, mins, secs with optional date
   }
   else
   {
-    draw_digit_images(h1, h2, i1, i2, s1, s2);
+    draw_digits(h1, h2, i1, i2, s1, s2);
 
     drawDate();
   }
@@ -738,7 +787,7 @@ void vfd_1_line_countup(){  // Timer Mode - Minutes and Seconds, with optional d
   int s1 = int(RTC_TimeStruct.Seconds / 10 );
   int s2 = int(RTC_TimeStruct.Seconds - s1*10 );
   
-  draw_digit_images(i1, i2, s1, s2, -1, -1);
+  draw_digits(i1, i2, s1, s2, -1, -1);
 
   drawDate();
 
