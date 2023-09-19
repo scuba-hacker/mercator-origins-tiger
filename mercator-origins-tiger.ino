@@ -49,6 +49,7 @@ uint32_t secondButtonPressedTime = 0;
 const char* ntpServer = "pool.ntp.org";
 const long  gmtOffset_sec = 0;        // timezone offset
 int   daylightOffset_sec = 0;   // DST offset
+const uint8_t max_NTP_connect_attempts=5;
 
 RTC_TimeTypeDef RTC_TimeStruct;
 RTC_DateTypeDef RTC_DateStruct;
@@ -224,21 +225,36 @@ void  initialiseRTCfromNTP()
     }
   }
 
+  delay(1000);
+
   if (WiFi.status() == WL_CONNECTED)
   {
     M5.Lcd.println("Wifi OK");
   
     //init and get the time
     _initialiseTimeFromNTP:
-    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-
+    
     struct tm timeinfo;
+    for (uint8_t i=0; i<max_NTP_connect_attempts; i++)
+    {
+      configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+      if(!getLocalTime(&timeinfo))
+      {
+        Serial.println("No time available (yet)");
+        // Let RTC continue with existing settings
+        M5.Lcd.println("Wait for NTP Time\n");
+        delay(1000);
+      }
+      else
+      {
+        break;        
+      }
+    }
+
     if(!getLocalTime(&timeinfo))
     {
-      Serial.println("No time available (yet)");
       // Let RTC continue with existing settings
-      M5.Lcd.println("Wait for NTP Time\n");
-      delay(1000);
+      M5.Lcd.println("No NTP Server\n");
     }
     else
     {
@@ -305,6 +321,7 @@ void  initialiseRTCfromNTP()
   else
   {
     M5.Lcd.println(" FAILED");
+    delay(5000);
   }
 
   M5.Lcd.fillScreen(BLACK);
