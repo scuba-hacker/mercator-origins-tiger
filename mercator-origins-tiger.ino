@@ -76,7 +76,7 @@ const char *monthName[12] = {
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
 };
 
-const int defaultBrightness = 15;
+const int defaultBrightness = 100;
 
 int countdownFrom=59;
 bool haltCountdown=false;
@@ -165,7 +165,6 @@ void shutdownIfUSBPowerOff()
       if (millis() > USBVoltageDropTime + milliSecondsToWaitForShutDown)
       {
        // initiate shutdown after 3 seconds.
-//       soundFile.close();
        delay(1000);
        fadeToBlackAndShutdown();
       }
@@ -359,7 +358,7 @@ void setup()
   setRotationForClockStyle();
 
   M5.Lcd.setTextSize(2);
-  M5.Axp.ScreenBreath(defaultBrightness);             // 7-15
+  M5.Axp.ScreenBreath(defaultBrightness);
   
   Serial.begin(115200);
 
@@ -490,13 +489,13 @@ void resetClock()
 
 void fadeToBlackAndShutdown()
 {
-  for (int i=14; i>6; i--)
+  for (int i = 90; i > 0; i=i-15)
   {
-    M5.Axp.ScreenBreath(i);             // 7-14 fade to black
+    M5.Axp.ScreenBreath(i);             // fade to black
     delay(100);
   }
 
-  M5.Axp.PowerOff(); 
+  M5.Axp.PowerOff();
 }
 
 bool checkReedSwitches()
@@ -838,9 +837,9 @@ void drawDate()
 }
 
 void fade(){
-  for (int i=7;i<16;i++){M5.Axp.ScreenBreath(i);delay(25);}
-  for (int i=15;i>7;i--){M5.Axp.ScreenBreath(i);delay(25);}
-  M5.Axp.ScreenBreath(defaultBrightness);             // 7-15
+  for (int i=0;i<100;i=i+15){M5.Axp.ScreenBreath(i);delay(25);}
+  for (int i=100;i>0;i=i-15){M5.Axp.ScreenBreath(i);delay(25);}
+  M5.Axp.ScreenBreath(defaultBrightness);
 }
 
 void vfd_2_line(){      // Unused mode - full date and time with year.
