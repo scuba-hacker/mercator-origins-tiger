@@ -27,6 +27,8 @@ Button ReedSwitchGoProSide = Button(BUTTON_REED_SIDE_PIN, true, MERCATOR_DEBOUNC
 Button LeakDetectorSwitch = Button(PENETRATOR_LEAK_DETECTOR_PIN, true, MERCATOR_DEBOUNCE_MS); // from utility/Button.h for M5 Stick C Plus
 uint16_t sideCount = 0, topCount = 0;
 
+const uint16_t mode_label_y_offset = 170;
+
 #include <WiFi.h>
 #include "time.h" 
 
@@ -271,7 +273,7 @@ void  initialiseRTCfromNTP()
       DateStruct.Date = timeinfo.tm_mday;
       DateStruct.Year = timeinfo.tm_year+1900;
       DateStruct.WeekDay = timeinfo.tm_wday;
-      M5.Rtc.SetData(&DateStruct);    
+      M5.Rtc.SetDate(&DateStruct);    
       if (daylightOffset_sec == 0)
         M5.Lcd.println("RTC to GMT");
       else
@@ -482,7 +484,7 @@ void resetClock()
   DateStruct.Date = timeinfo.tm_mday;
   DateStruct.Year = timeinfo.tm_year+1900;
   DateStruct.WeekDay = timeinfo.tm_wday;
-  M5.Rtc.SetData(&DateStruct);    
+  M5.Rtc.SetDate(&DateStruct);    
 
   mode_ = 3; // change back to 3
 }
@@ -524,7 +526,7 @@ bool checkReedSwitches()
   }
   
     
-  if (primaryButtonIsPressed)
+  if (primaryButtonIsPressed && millis()-primaryButtonPressedTime > 250)
   {
     M5.Lcd.setTextSize(3);
     M5.Lcd.setTextColor(TFT_WHITE, TFT_RED);
@@ -540,7 +542,7 @@ bool checkReedSwitches()
     M5.Lcd.print(" ");
   }
   
-  if (secondButtonIsPressed)
+  if (secondButtonIsPressed && millis()-secondButtonPressedTime > 250)
   {
     M5.Lcd.setTextSize(3);
     M5.Lcd.setTextColor(TFT_WHITE, TFT_BLUE);
@@ -651,7 +653,7 @@ void vfd_4_line_countdown(const int countdownFrom){ // Countdown mode, minutes, 
   if (!haltCountdown)
   {
     M5.Rtc.GetTime(&RTC_TimeStruct);
-    M5.Rtc.GetData(&RTC_DateStruct);
+    M5.Rtc.GetDate(&RTC_DateStruct);
     int minutesRemaining = countdownFrom - RTC_TimeStruct.Minutes;
     int secondsRemaining = 59 - RTC_TimeStruct.Seconds;
         
@@ -670,6 +672,15 @@ void vfd_4_line_countdown(const int countdownFrom){ // Countdown mode, minutes, 
     M5.Lcd.pushImage(121,6,35,67, (uint16_t *)m[s2]);
 */
     drawDate();
+
+    M5.Lcd.setTextSize(3);
+    M5.Lcd.setTextColor(TFT_CYAN, TFT_BLACK);
+    
+    M5.Lcd.setCursor(25, mode_label_y_offset);
+    M5.Lcd.print("Count");
+
+    M5.Lcd.setCursor(35, mode_label_y_offset+28);
+    M5.Lcd.print("Down");
 
     if ( s1 == 0 && s2 == 0 ){ fade();}
 
@@ -769,7 +780,7 @@ void draw_digit_images(int h1, int h2, int i1, int i2, int s1, int s2)
 
 void vfd_3_line_clock(){    // Clock mode - Hours, mins, secs with optional date
   M5.Rtc.GetTime(&RTC_TimeStruct);
-  M5.Rtc.GetData(&RTC_DateStruct);
+  M5.Rtc.GetDate(&RTC_DateStruct);
   int h1 = int(RTC_TimeStruct.Hours / 10 );
   int h2 = int(RTC_TimeStruct.Hours - h1*10 );
   int i1 = int(RTC_TimeStruct.Minutes / 10 );
@@ -790,6 +801,13 @@ void vfd_3_line_clock(){    // Clock mode - Hours, mins, secs with optional date
     draw_digits(h1, h2, i1, i2, s1, s2);
 
     drawDate();
+
+    M5.Lcd.setTextSize(3);
+    M5.Lcd.setTextColor(TFT_CYAN, TFT_BLACK);
+    
+    M5.Lcd.setCursor(35, mode_label_y_offset+28);
+    M5.Lcd.setTextColor(TFT_CYAN, TFT_BLACK);
+    M5.Lcd.print("Time");
   }
    
   if ( s1 == 0 && s2 == 0 ){ fade();}
@@ -797,7 +815,7 @@ void vfd_3_line_clock(){    // Clock mode - Hours, mins, secs with optional date
  
 void vfd_1_line_countup(){  // Timer Mode - Minutes and Seconds, with optional date
   M5.Rtc.GetTime(&RTC_TimeStruct);
-  M5.Rtc.GetData(&RTC_DateStruct);
+  M5.Rtc.GetDate(&RTC_DateStruct);
   int i1 = int(RTC_TimeStruct.Minutes / 10 );
   int i2 = int(RTC_TimeStruct.Minutes - i1*10 );
   int s1 = int(RTC_TimeStruct.Seconds / 10 );
@@ -806,6 +824,13 @@ void vfd_1_line_countup(){  // Timer Mode - Minutes and Seconds, with optional d
   draw_digits(i1, i2, s1, s2, -1, -1);
 
   drawDate();
+
+  M5.Lcd.setTextSize(3);
+  M5.Lcd.setTextColor(TFT_CYAN, TFT_BLACK);
+  M5.Lcd.setCursor(25, mode_label_y_offset);
+  M5.Lcd.print("Count");
+  M5.Lcd.setCursor(55, mode_label_y_offset+28);
+  M5.Lcd.print("Up");
 
   if ( s1 == 0 && s2 == 0 ){ fade();}
 }
@@ -844,7 +869,7 @@ void fade(){
 
 void vfd_2_line(){      // Unused mode - full date and time with year.
   M5.Rtc.GetTime(&RTC_TimeStruct);
-  M5.Rtc.GetData(&RTC_DateStruct);
+  M5.Rtc.GetDate(&RTC_DateStruct);
   //Serial.printf("Data: %04d-%02d-%02d\n",RTC_DateStruct.Year,RTC_DateStruct.Month,RTC_DateStruct.Date);
   //Serial.printf("Week: %d\n",RTC_DateStruct.WeekDay);
   //Serial.printf("Time: %02d : %02d : %02d\n",RTC_TimeStruct.Hours,RTC_TimeStruct.Minutes,RTC_TimeStruct.Seconds);
