@@ -56,7 +56,7 @@ const uint8_t max_NTP_connect_attempts=5;
 RTC_TimeTypeDef RTC_TimeStruct;
 RTC_DateTypeDef RTC_DateStruct;
 
-const char* leakAlarmMsg = "    Cable\n\n  Penetrator\n\n    Leak!";
+const char* leakAlarmMsg = "\nWATER\n\nLEAK\n\nALARM";
 
 // initial mode is Clock
 int mode_ = 3; // 3:2Lines 2: 2Lines(YYMM), 1:1Line
@@ -392,7 +392,7 @@ void checkForLeak(const char* msg, const uint8_t pin)
   if (leakStatus)
   {
     M5.Lcd.fillScreen(TFT_RED);
-    M5.Lcd.setTextSize(3);
+    M5.Lcd.setTextSize(4);
     M5.Lcd.setCursor(5, 10);
     M5.Lcd.setTextColor(TFT_WHITE, TFT_RED);
     M5.Lcd.print(msg);
