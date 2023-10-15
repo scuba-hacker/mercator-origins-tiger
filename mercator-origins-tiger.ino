@@ -4,6 +4,19 @@
 // rename the git file "mercator_secrets_template.c" to the filename below, filling in your wifi credentials etc.
 #include "mercator_secrets.c"
 
+bool writeLogToSerial=false;
+
+bool goProButtonsPrimaryControl = true;
+
+#include <esp_now.h>
+#include <WiFi.h>
+#include <freertos/queue.h>
+const uint8_t ESPNOW_CHANNEL=1;
+QueueHandle_t msgsReceivedQueue;
+
+bool enableESPNOW = true;
+bool ESPNowActive = false;
+
 // Nixie Clock graphics files
 #include "vfd_18x34.c"
 #include "vfd_35x67.c"
@@ -40,6 +53,8 @@ AsyncWebServer asyncWebServer(80);      // OTA updates
 const bool enableOTAServer=false; // OTA updates
 bool otaActiveListening=true;   // OTA updates toggle
 
+const bool enableESPNow = !enableOTAServer; // cannot have OTA server on regular wifi and espnow concurrently running
+
 Button* p_primaryButton = NULL;
 Button* p_secondButton = NULL;
 
@@ -58,12 +73,7 @@ RTC_DateTypeDef RTC_DateStruct;
 
 const char* leakAlarmMsg = "\nWATER\n\nLEAK\n\nALARM";
 
-// initial mode is Clock
-int mode_ = 3; // 3:2Lines 2: 2Lines(YYMM), 1:1Line
-
-// temp change: mic screen is Clock
-// int mode_ = 5; 
-
+int mode_ = 3; // clock
 
 const uint8_t*n[] = { // vfd font 18x34
   vfd_18x34_0,vfd_18x34_1,vfd_18x34_2,vfd_18x34_3,vfd_18x34_4,
@@ -332,7 +342,11 @@ void  initialiseRTCfromNTP()
   resetClock();
 }
 
-bool goProButtonsPrimaryControl = true;
+char rxQueueItemBuffer[256];
+const uint8_t queueLength=4;
+
+char currentTarget[256];
+bool refreshTargetShown = false;  
 
 void setup()
 { 
@@ -342,7 +356,16 @@ void setup()
    
   M5.begin();
 
+  Serial.begin(115200);
+
   pinMode(UNUSED_GPIO_36_PIN,INPUT);
+
+  msgsReceivedQueue = xQueueCreate(queueLength,sizeof(rxQueueItemBuffer));
+
+  if (writeLogToSerial && msgsReceivedQueue == NULL)
+  {
+    Serial.println("Failed to create queue");
+  }
 
   if (goProButtonsPrimaryControl)
   {
@@ -374,6 +397,14 @@ void setup()
   }
 
   initialiseRTCfromNTP();
+
+  // override clock screen to be test for target received from espnow
+  mode_ = 3;
+  
+  if (enableESPNow && msgsReceivedQueue)
+  {
+    configAndStartUpESPNow();
+  }
 }
 
 void checkForLeak(const char* msg, const uint8_t pin)
@@ -462,6 +493,12 @@ void resetCountDownTimer()
   haltCountdown=false;
   resetCountUpTimer();
   mode_ = 4;
+}
+
+void resetCurrentTarget()
+{
+  refreshTargetShown = true;
+  mode_ = 5;
 }
 
 void resetClock()
@@ -560,12 +597,17 @@ bool checkReedSwitches()
 
   if (p_primaryButton->wasReleasefor(100))
   {
+    /* Original Screen Cycle:
     // Screen cycle command
     if (mode_ == 4) // countdown mode, next is clock
     {
       resetClock(); changeMade = true;
     }
-    else if (mode_ == 3) // clock mode, next is timer
+    else if (mode_ == 3) // clock mode, next is show current target
+    {
+      resetCurrentTarget(); changeMade = true;
+    }
+    else if (mode_ == 5)     // show current target, next is count up timer
     {
       resetCountUpTimer(); changeMade = true;
     }
@@ -573,11 +615,23 @@ bool checkReedSwitches()
     {
       resetCountDownTimer(); changeMade = true;
     }
+    */
+    
+    if (mode_ == 3) // clock mode, next is show current target
+    {
+      resetCurrentTarget(); changeMade = true;
+    }
+    else if (mode_ == 5)     // show current target, next is clock
+    {
+      resetClock(); changeMade = true;
+    }
   }
 
   // press second button for 5 seconds to attempt WiFi connect and enable OTA
   if (p_secondButton->wasReleasefor(5000))
   { 
+    TeardownESPNow();
+    
     // enable OTA
     if (!setupOTAWebServer(ssid_1, password_1, label_1, timeout_1))
       if (!setupOTAWebServer(ssid_2, password_2, label_2, timeout_2))
@@ -623,11 +677,33 @@ bool checkReedSwitches()
   return changeMade;
 }
 
-void loop(void)
+void loop()
 { 
   shutdownIfUSBPowerOff();
 //  toggleOTAActiveAndWifiIfUSBPowerOff();
 
+  if (msgsReceivedQueue)
+  {
+    if (xQueueReceive(msgsReceivedQueue,&(rxQueueItemBuffer),(TickType_t)0))
+    {
+      switch(rxQueueItemBuffer[0])
+      {
+        case 'c':   // current target
+        {
+          strncpy(currentTarget,rxQueueItemBuffer+1,sizeof(currentTarget));
+          refreshTargetShown = true;
+          break;
+        }
+        
+        default:
+        {
+          
+        }
+      }
+    }
+  }
+  
+  if ( mode_ == 5) { vfd_5_current_target();}
   if ( mode_ == 4) { vfd_4_line_countdown(countdownFrom);}   // mm,ss, optional dd mm
   if ( mode_ == 3 ){ vfd_3_line_clock();}   // hh,mm,ss, optional dd mm
   if ( mode_ == 2 ){ vfd_2_line();}   // yyyy,mm,dd,hh,mm,ss - not used.
@@ -645,6 +721,34 @@ void loop(void)
       break;
     }
   }
+}
+
+void vfd_5_current_target()
+{
+  if (refreshTargetShown == true)
+  {
+    M5.Lcd.fillScreen(TFT_BLACK);
+    refreshTargetShown = false;
+  }
+
+  if (ESPNowActive)
+  {    
+    M5.Lcd.setCursor(0,0);
+    M5.Lcd.setTextSize(3);
+    M5.Lcd.setTextColor(TFT_YELLOW);
+    M5.Lcd.println(currentTarget);
+  }
+  else
+  {
+    M5.Lcd.setCursor(0,0);
+    M5.Lcd.setTextSize(3);
+    M5.Lcd.setTextColor(TFT_RED);
+    M5.Lcd.println("  No\nTarget\n\nESPNow\nIs Off");    
+  }
+
+  M5.Lcd.setCursor(0, mode_label_y_offset+10);
+  M5.Lcd.setTextColor(TFT_CYAN, TFT_BLACK);
+  M5.Lcd.print("Towards");
 }
 
 void vfd_4_line_countdown(const int countdownFrom){ // Countdown mode, minutes, seconds
@@ -917,6 +1021,7 @@ void vfd_2_line(){      // Unused mode - full date and time with year.
 bool setupOTAWebServer(const char* _ssid, const char* _password, const char* label, uint32_t timeout)
 {
   bool forcedCancellation = false;
+
   M5.Lcd.setCursor(0, 0);
   M5.Lcd.fillScreen(TFT_BLACK);
   M5.Lcd.setTextSize(2);
@@ -1028,3 +1133,114 @@ void updateButtonsAndBuzzer()
     }
   }
 }
+
+char ESPNowbuffer[256];
+
+void InitESPNow() 
+{
+  WiFi.disconnect();
+  if (esp_now_init() == ESP_OK) 
+  {
+    if (writeLogToSerial)
+      Serial.println("ESPNow Init Success");
+    ESPNowActive = true;
+  }
+  else 
+  {
+    if (writeLogToSerial)
+      Serial.println("ESPNow Init Failed");
+    // Retry InitESPNow, add a counte and then restart?
+    // InitESPNow();
+    // or Simply Restart
+    ESP.restart();
+  }
+}
+
+void configESPNowDeviceAP() 
+{
+  String Prefix = "Tiger:";
+  String Mac = WiFi.macAddress();
+  String SSID = Prefix + Mac;
+  String Password = "123456789";
+  bool result = WiFi.softAP(SSID.c_str(), Password.c_str(), ESPNOW_CHANNEL, 0);
+
+  if (writeLogToSerial)
+  {
+    if (!result) 
+    {
+      Serial.println("AP Config failed.");
+    } 
+    else 
+    {
+      Serial.printf("AP Config Success. Broadcasting with AP: %s\n",String(SSID).c_str());
+      Serial.printf("WiFi Channel: %d\n",WiFi.channel());
+    }
+  }  
+}
+
+void configAndStartUpESPNow()
+{
+  if (writeLogToSerial)
+    Serial.println("ESPNow/Basic Example");
+  
+  //Set device in AP mode to begin with
+  WiFi.mode(WIFI_AP);
+  
+  // configure device AP mode
+  configESPNowDeviceAP();
+  
+  // This is the mac address of this peer in AP Mode
+  if (writeLogToSerial)
+    Serial.print("AP MAC: "); Serial.println(WiFi.softAPmacAddress());
+  
+  // Init ESPNow with a fallback logic
+  InitESPNow();
+  
+  // Once ESPNow is successfully Init, we will register for recv CB to
+  // get recv packer info.
+  esp_now_register_recv_cb(OnESPNowDataRecv);
+}
+
+// callback when data is recv from Master
+void OnESPNowDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len) 
+{
+  if (writeLogToSerial)
+  {
+    char macStr[18];
+    snprintf(macStr, sizeof(macStr), "%02x:%02x:%02x:%02x:%02x:%02x",
+             mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
+    Serial.printf("Last Packet Recv from: %s\n",macStr);
+    Serial.printf("Last Packet Recv 1st Byte: '%c'\n",*data);
+    Serial.printf("Last Packet Recv Length: %d\n",data_len);
+    Serial.println((char*)data);
+  }
+
+  char received[256];
+  memcpy(received,data,data_len);
+  received[data_len] = '\0';
+
+
+  xQueueSend(msgsReceivedQueue, (void*)data, (TickType_t)0);  // don't block on enqueue
+
+  // Writing to the Lcd fails from here as this is the WiFi Task thread.
+  //
+  // Create a queue at the start
+  // add to the queue the command received.
+  // read from the queue in the loop() method
+  // dispatch the command appropriately in the loop()method
+}
+
+bool TeardownESPNow()
+{
+  bool result = false;
+
+  if (enableESPNow && ESPNowActive)
+  {
+    WiFi.disconnect();
+    ESPNowActive = false;
+    result = true;
+  }
+  
+  return result;
+}
+ 
