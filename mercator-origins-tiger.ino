@@ -11,10 +11,26 @@ bool goProButtonsPrimaryControl = true;
 #include <esp_now.h>
 #include <WiFi.h>
 #include <freertos/queue.h>
+
+// ************** ESPNow variables **************
+
+uint16_t ESPNowMessagesDelivered = 0;
+uint16_t ESPNowMessagesFailedToDeliver = 0;
+
 const uint8_t ESPNOW_CHANNEL=1;
+const uint8_t ESPNOW_NO_PEER_CHANNEL_FLAG = 0xFF;
+const uint8_t ESPNOW_PRINTSCANRESULTS = 0;
+const uint8_t ESPNOW_DELETEBEFOREPAIR = 0;
+
+esp_now_peer_info_t ESPNow_mako_peer;
+bool isPairedWithMako = false;
+
+const int RESET_ESPNOW_SEND_RESULT = 0xFF;
+esp_err_t ESPNowSendResult=(esp_err_t)RESET_ESPNOW_SEND_RESULT;
+
 QueueHandle_t msgsReceivedQueue;
 
-bool enableESPNOW = true;
+
 bool ESPNowActive = false;
 
 // Nixie Clock graphics files
@@ -60,8 +76,11 @@ Button* p_secondButton = NULL;
 
 bool primaryButtonIsPressed = false;
 uint32_t primaryButtonPressedTime = 0;
+uint32_t lastPrimaryButtonPressLasted = 0;
+
 bool secondButtonIsPressed = false;
 uint32_t secondButtonPressedTime = 0;
+uint32_t lastSecondButtonPressLasted = 0;
 
 const char* ntpServer = "pool.ntp.org";
 const long  gmtOffset_sec = 0;        // timezone offset
@@ -87,6 +106,8 @@ const char *monthName[12] = {
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
 };
+
+#define USB_SERIAL Serial
 
 const int defaultBrightness = 100;
 
@@ -251,7 +272,7 @@ void  initialiseRTCfromNTP()
       configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
       if(!getLocalTime(&timeinfo))
       {
-        Serial.println("No time available (yet)");
+        USB_SERIAL.println("No time available (yet)");
         // Let RTC continue with existing settings
         M5.Lcd.println("Wait for NTP Time\n");
         delay(1000);
@@ -269,7 +290,7 @@ void  initialiseRTCfromNTP()
     }
     else
     {
-      // Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
+      // USB_SERIAL.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
       // Use NTP to update RTC
     
       RTC_TimeTypeDef TimeStruct;
@@ -356,7 +377,7 @@ void setup()
    
   M5.begin();
 
-  Serial.begin(115200);
+  USB_SERIAL.begin(115200);
 
   pinMode(UNUSED_GPIO_36_PIN,INPUT);
 
@@ -364,7 +385,7 @@ void setup()
 
   if (writeLogToSerial && msgsReceivedQueue == NULL)
   {
-    Serial.println("Failed to create queue");
+    USB_SERIAL.println("Failed to create queue");
   }
 
   if (goProButtonsPrimaryControl)
@@ -385,7 +406,7 @@ void setup()
   M5.Lcd.setTextSize(2);
   M5.Axp.ScreenBreath(defaultBrightness);
   
-  Serial.begin(115200);
+  USB_SERIAL.begin(115200);
 
   if (enableOTAServer)
   {
@@ -404,6 +425,16 @@ void setup()
   if (enableESPNow && msgsReceivedQueue)
   {
     configAndStartUpESPNow();
+
+    M5.Lcd.fillScreen(TFT_BLACK);
+    M5.Lcd.setCursor(0,0);
+    isPairedWithMako = pairWithPeer(ESPNow_mako_peer,"Mako",5); // 5 connection attempts
+    
+    if (isPairedWithMako)
+    {
+      // send message to tiger to give first target
+      publishToMakoTestMessage("Conn Ok");
+    }
   }
 }
 
@@ -505,7 +536,7 @@ void resetClock()
 {
   struct tm timeinfo;
   if(!getLocalTime(&timeinfo)){
-    Serial.println("Failed to obtain time");
+    USB_SERIAL.println("Failed to obtain time");
     return;
   }
   
@@ -540,6 +571,9 @@ void fadeToBlackAndShutdown()
 bool checkReedSwitches()
 {
   bool changeMade = false;
+
+  bool reedSwitchTop;
+  uint32_t activationTime=0;
     
   updateButtonsAndBuzzer();
 
@@ -561,7 +595,6 @@ bool checkReedSwitches()
     pressedSecondButtonX = 5;
     pressedSecondButtonY = 210;
   }
-  
     
   if (primaryButtonIsPressed && millis()-primaryButtonPressedTime > 250)
   {
@@ -597,6 +630,9 @@ bool checkReedSwitches()
 
   if (p_primaryButton->wasReleasefor(100))
   {
+    activationTime = lastPrimaryButtonPressLasted;
+    reedSwitchTop = true;
+    
     /* Original Screen Cycle:
     // Screen cycle command
     if (mode_ == 4) // countdown mode, next is clock
@@ -630,6 +666,9 @@ bool checkReedSwitches()
   // press second button for 5 seconds to attempt WiFi connect and enable OTA
   if (p_secondButton->wasReleasefor(5000))
   { 
+    activationTime = lastSecondButtonPressLasted;
+    reedSwitchTop = false;
+
     TeardownESPNow();
     
     // enable OTA
@@ -644,6 +683,9 @@ bool checkReedSwitches()
   // press second button for 1 second...
   else if (p_secondButton->wasReleasefor(1000))
   {
+    activationTime = lastSecondButtonPressLasted;
+    reedSwitchTop = false;
+
     // Screen modification command
     if (mode_ == 4)       // Countdown mode, reduce timer by 15 mins
     {
@@ -656,6 +698,9 @@ bool checkReedSwitches()
   // press second button for 0.1 second...
   else if (p_secondButton->wasReleasefor(100))
   {
+    activationTime = lastSecondButtonPressLasted;
+    reedSwitchTop = false;
+
     // Screen reset command
     if (mode_ == 4)
     {
@@ -674,7 +719,51 @@ bool checkReedSwitches()
       M5.Lcd.fillScreen(BLACK);
     }
   }
+  
+  if (activationTime > 0)
+  {
+    USB_SERIAL.println("Reed Activated...");
+    publishToMakoReedActivation(reedSwitchTop, activationTime);
+  }
+  
   return changeMade;
+}
+
+char mako_espnow_buffer[256];
+
+void publishToMakoTestMessage(const char* testMessage)
+{     
+  if (isPairedWithMako && ESPNow_mako_peer.channel == ESPNOW_CHANNEL)
+  {
+    /*
+    memset(mako_espnow_buffer,0,sizeof(mako_espnow_buffer));
+    mako_espnow_buffer[0] = 'T';  // command T = Tiger
+    mako_espnow_buffer[1] = '\0';
+    strncpy(mako_espnow_buffer+1,testMessage,sizeof(mako_espnow_buffer)-2);
+*/
+    snprintf(mako_espnow_buffer,sizeof(mako_espnow_buffer),"T%s",testMessage);
+    if (writeLogToSerial)
+    {
+      USB_SERIAL.println("Sending ESP T msg to Mako...");
+      USB_SERIAL.println(mako_espnow_buffer);
+    }
+    
+    ESPNowSendResult = esp_now_send(ESPNow_mako_peer.peer_addr, (uint8_t*)mako_espnow_buffer, strlen(mako_espnow_buffer)+1);
+  }
+}
+
+void publishToMakoReedActivation(const bool topReed, const uint32_t ms)
+{     
+  if (isPairedWithMako && ESPNow_mako_peer.channel == ESPNOW_CHANNEL)
+  {
+    snprintf(mako_espnow_buffer,sizeof(mako_espnow_buffer),"R%c%lu       ",(topReed ? 'T' : 'B'),ms);
+    if (writeLogToSerial)
+    {
+      USB_SERIAL.println("Sending ESP R msg to Mako...");
+      USB_SERIAL.println(mako_espnow_buffer);
+    }
+    ESPNowSendResult = esp_now_send(ESPNow_mako_peer.peer_addr, (uint8_t*)mako_espnow_buffer, strlen(mako_espnow_buffer)+1);
+  }
 }
 
 void loop()
@@ -974,9 +1063,9 @@ void fade(){
 void vfd_2_line(){      // Unused mode - full date and time with year.
   M5.Rtc.GetTime(&RTC_TimeStruct);
   M5.Rtc.GetDate(&RTC_DateStruct);
-  //Serial.printf("Data: %04d-%02d-%02d\n",RTC_DateStruct.Year,RTC_DateStruct.Month,RTC_DateStruct.Date);
-  //Serial.printf("Week: %d\n",RTC_DateStruct.WeekDay);
-  //Serial.printf("Time: %02d : %02d : %02d\n",RTC_TimeStruct.Hours,RTC_TimeStruct.Minutes,RTC_TimeStruct.Seconds);
+  //USB_SERIAL.printf("Data: %04d-%02d-%02d\n",RTC_DateStruct.Year,RTC_DateStruct.Month,RTC_DateStruct.Date);
+  //USB_SERIAL.printf("Week: %d\n",RTC_DateStruct.WeekDay);
+  //USB_SERIAL.printf("Time: %02d : %02d : %02d\n",RTC_TimeStruct.Hours,RTC_TimeStruct.Minutes,RTC_TimeStruct.Seconds);
   // Data: 2019-06-06
   // Week: 0
   // Time: 09 : 55 : 26
@@ -1111,6 +1200,7 @@ void updateButtonsAndBuzzer()
   {
     if (primaryButtonIsPressed)
     {
+      lastPrimaryButtonPressLasted = millis() - primaryButtonPressedTime;
       primaryButtonIsPressed=false;
       primaryButtonPressedTime=0;
     }
@@ -1128,6 +1218,7 @@ void updateButtonsAndBuzzer()
   {
     if (secondButtonIsPressed)
     {
+      lastSecondButtonPressLasted = millis() - secondButtonPressedTime;
       secondButtonIsPressed=false;
       secondButtonPressedTime=0;
     }
@@ -1136,24 +1227,28 @@ void updateButtonsAndBuzzer()
 
 char ESPNowbuffer[256];
 
-void InitESPNow() 
+void configAndStartUpESPNow()
 {
-  WiFi.disconnect();
-  if (esp_now_init() == ESP_OK) 
-  {
-    if (writeLogToSerial)
-      Serial.println("ESPNow Init Success");
-    ESPNowActive = true;
-  }
-  else 
-  {
-    if (writeLogToSerial)
-      Serial.println("ESPNow Init Failed");
-    // Retry InitESPNow, add a counte and then restart?
-    // InitESPNow();
-    // or Simply Restart
-    ESP.restart();
-  }
+  if (writeLogToSerial)
+    USB_SERIAL.println("ESPNow/Basic Example");
+  
+  //Set device in AP mode to begin with
+  WiFi.mode(WIFI_AP);
+  
+  // configure device AP mode
+  configESPNowDeviceAP();
+  
+  // This is the mac address of this peer in AP Mode
+  if (writeLogToSerial)
+    USB_SERIAL.print("AP MAC: "); USB_SERIAL.println(WiFi.softAPmacAddress());
+  
+  // Init ESPNow with a fallback logic
+  InitESPNow();
+  
+  // Once ESPNow is successfully Init, we will register for recv CB to
+  // get recv packer info.
+  esp_now_register_send_cb(OnESPNowDataSent);
+  esp_now_register_recv_cb(OnESPNowDataRecv);
 }
 
 void configESPNowDeviceAP() 
@@ -1168,37 +1263,44 @@ void configESPNowDeviceAP()
   {
     if (!result) 
     {
-      Serial.println("AP Config failed.");
+      USB_SERIAL.println("AP Config failed.");
     } 
     else 
     {
-      Serial.printf("AP Config Success. Broadcasting with AP: %s\n",String(SSID).c_str());
-      Serial.printf("WiFi Channel: %d\n",WiFi.channel());
+      USB_SERIAL.printf("AP Config Success. Broadcasting with AP: %s\n",String(SSID).c_str());
+      USB_SERIAL.printf("WiFi Channel: %d\n",WiFi.channel());
     }
   }  
 }
 
-void configAndStartUpESPNow()
+void InitESPNow() 
 {
-  if (writeLogToSerial)
-    Serial.println("ESPNow/Basic Example");
-  
-  //Set device in AP mode to begin with
-  WiFi.mode(WIFI_AP);
-  
-  // configure device AP mode
-  configESPNowDeviceAP();
-  
-  // This is the mac address of this peer in AP Mode
-  if (writeLogToSerial)
-    Serial.print("AP MAC: "); Serial.println(WiFi.softAPmacAddress());
-  
-  // Init ESPNow with a fallback logic
-  InitESPNow();
-  
-  // Once ESPNow is successfully Init, we will register for recv CB to
-  // get recv packer info.
-  esp_now_register_recv_cb(OnESPNowDataRecv);
+  WiFi.disconnect();
+  if (esp_now_init() == ESP_OK) 
+  {
+    if (writeLogToSerial)
+      USB_SERIAL.println("ESPNow Init Success");
+    ESPNowActive = true;
+  }
+  else 
+  {
+    if (writeLogToSerial)
+      USB_SERIAL.println("ESPNow Init Failed");
+    ESPNowActive = false;
+  }
+}
+
+// callback when data is sent from Master to Peer
+void OnESPNowDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) 
+{
+  if (status == ESP_NOW_SEND_SUCCESS)
+  {
+    ESPNowMessagesDelivered++;
+  }
+  else
+  {
+    ESPNowMessagesFailedToDeliver++;
+  }
 }
 
 // callback when data is recv from Master
@@ -1209,25 +1311,13 @@ void OnESPNowDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len
     char macStr[18];
     snprintf(macStr, sizeof(macStr), "%02x:%02x:%02x:%02x:%02x:%02x",
              mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
-    Serial.printf("Last Packet Recv from: %s\n",macStr);
-    Serial.printf("Last Packet Recv 1st Byte: '%c'\n",*data);
-    Serial.printf("Last Packet Recv Length: %d\n",data_len);
-    Serial.println((char*)data);
+    USB_SERIAL.printf("Last Packet Recv from: %s\n",macStr);
+    USB_SERIAL.printf("Last Packet Recv 1st Byte: '%c'\n",*data);
+    USB_SERIAL.printf("Last Packet Recv Length: %d\n",data_len);
+    USB_SERIAL.println((char*)data);
   }
 
-  char received[256];
-  memcpy(received,data,data_len);
-  received[data_len] = '\0';
-
-
   xQueueSend(msgsReceivedQueue, (void*)data, (TickType_t)0);  // don't block on enqueue
-
-  // Writing to the Lcd fails from here as this is the WiFi Task thread.
-  //
-  // Create a queue at the start
-  // add to the queue the command received.
-  // read from the queue in the loop() method
-  // dispatch the command appropriately in the loop()method
 }
 
 bool TeardownESPNow()
@@ -1242,5 +1332,262 @@ bool TeardownESPNow()
   }
   
   return result;
+}
+
+// Scan for peers in AP mode
+bool ESPNowScanForPeer(esp_now_peer_info_t& peer, const char* peerSSIDPrefix)
+{
+  bool peerFound = false;
+  
+  M5.Lcd.println("Scanning Networks...");
+  int8_t scanResults = WiFi.scanNetworks();
+  M5.Lcd.println("Complete");
+  
+  // reset on each scan 
+  memset(&peer, 0, sizeof(peer));
+
+  if (writeLogToSerial)
+    USB_SERIAL.println("");
+
+  if (scanResults == 0) 
+  {   
+    if (writeLogToSerial)
+      USB_SERIAL.println("No WiFi devices in AP Mode found");
+
+    peer.channel = ESPNOW_NO_PEER_CHANNEL_FLAG;
+  } 
+  else 
+  {
+    if (writeLogToSerial)
+    {
+      USB_SERIAL.print("Found "); USB_SERIAL.print(scanResults); USB_SERIAL.println(" devices ");
+    }
+    
+    for (int i = 0; i < scanResults; ++i) 
+    {
+      // Print SSID and RSSI for each device found
+      String SSID = WiFi.SSID(i);
+      int32_t RSSI = WiFi.RSSI(i);
+      String BSSIDstr = WiFi.BSSIDstr(i);
+
+      if (writeLogToSerial && ESPNOW_PRINTSCANRESULTS) 
+      {
+        USB_SERIAL.print(i + 1);
+        USB_SERIAL.print(": ");
+        USB_SERIAL.print(SSID);
+        USB_SERIAL.print(" (");
+        USB_SERIAL.print(RSSI);
+        USB_SERIAL.print(")");
+        USB_SERIAL.println("");
+      }
+      
+      delay(10);
+      
+      // Check if the current device starts with the peerSSIDPrefix
+      if (SSID.indexOf(peerSSIDPrefix) == 0) 
+      {
+        if (writeLogToSerial)
+        {
+          // SSID of interest
+          USB_SERIAL.println("Found a peer.");
+          USB_SERIAL.print(i + 1); USB_SERIAL.print(": "); USB_SERIAL.print(SSID); USB_SERIAL.print(" ["); USB_SERIAL.print(BSSIDstr); USB_SERIAL.print("]"); USB_SERIAL.print(" ("); USB_SERIAL.print(RSSI); USB_SERIAL.print(")"); USB_SERIAL.println("");
+        }
+                
+        // Get BSSID => Mac Address of the Slave
+        int mac[6];
+        if ( 6 == sscanf(BSSIDstr.c_str(), "%x:%x:%x:%x:%x:%x",  &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5] ) ) 
+        {
+          for (int ii = 0; ii < 6; ++ii ) 
+          {
+            peer.peer_addr[ii] = (uint8_t) mac[ii];
+          }
+        }
+
+        peer.channel = ESPNOW_CHANNEL; // pick a channel
+        peer.encrypt = 0; // no encryption
+
+        peer.priv = (void*)peerSSIDPrefix;   // distinguish between different peers
+
+        peerFound = true;
+        // we are planning to have only one slave in this example;
+        // Hence, break after we find one, to be a bit efficient
+        break;
+      }
+    }
+  }
+
+  if (peerFound) 
+  {
+    M5.Lcd.println("Peer Found");
+    if (writeLogToSerial)
+      USB_SERIAL.println("Peer Found, processing..");
+  } 
+  else 
+  {
+    M5.Lcd.println("Peer Not Found");
+    if (writeLogToSerial)
+      USB_SERIAL.println("Peer Not Found, trying again.");
+  }
+  
+  // clean up ram
+  WiFi.scanDelete();
+
+  return peerFound;
+}
+
+bool pairWithPeer(esp_now_peer_info_t& peer, const char* peerSSIDPrefix, int maxAttempts)
+{
+  bool isPaired = false;
+  while(maxAttempts-- && !isPaired)
+  {
+    bool result = ESPNowScanForPeer(peer,peerSSIDPrefix);
+
+    // check if peer channel is defined
+    if (result && peer.channel == ESPNOW_CHANNEL)
+    { 
+      isPaired = ESPNowManagePeer(peer);
+      M5.Lcd.printf("%s Pair ok\n",peerSSIDPrefix);
+    }
+    else
+    {
+      peer.channel = ESPNOW_NO_PEER_CHANNEL_FLAG;
+      M5.Lcd.printf("%s Pair fail\n",peerSSIDPrefix);
+    }
+  }
+
+  delay(1000);
+  
+  M5.Lcd.fillScreen(TFT_BLACK);
+  M5.Lcd.setCursor(0,0);
+  
+  return isPaired;
+}
+
+// Check if the peer is already paired with the master.
+// If not, pair the peer with master
+bool ESPNowManagePeer(esp_now_peer_info_t& peer)
+{
+  bool result = false;
+  
+  if (peer.channel == ESPNOW_CHANNEL) 
+  {
+    if (ESPNOW_DELETEBEFOREPAIR) 
+    {
+      ESPNowDeletePeer(peer);
+    }
+
+    if (writeLogToSerial)
+      USB_SERIAL.print("Peer Status: ");
+      
+    // check if the peer exists
+    bool exists = esp_now_is_peer_exist(peer.peer_addr);
+    
+    if (exists) 
+    {
+      // Peer already paired.
+      if (writeLogToSerial)
+        USB_SERIAL.println("Already Paired");
+
+      M5.Lcd.println("Already paired");
+      result = true;
+    } 
+    else 
+    {
+      // Peer not paired, attempt pair
+      esp_err_t addStatus = esp_now_add_peer(&peer);
+      
+      if (addStatus == ESP_OK) 
+      {
+        // Pair success
+        if (writeLogToSerial)
+          USB_SERIAL.println("Pair success");
+        M5.Lcd.println("Pair success");
+        result = true;
+      } 
+      else if (addStatus == ESP_ERR_ESPNOW_NOT_INIT) 
+      {
+        // How did we get so far!!
+        if (writeLogToSerial)
+          USB_SERIAL.println("ESPNOW Not Init");
+        result = false;
+      } 
+      else if (addStatus == ESP_ERR_ESPNOW_ARG) 
+      {
+        if (writeLogToSerial)
+            USB_SERIAL.println("Invalid Argument");
+        result = false;
+      } 
+      else if (addStatus == ESP_ERR_ESPNOW_FULL) 
+      {
+        if (writeLogToSerial)
+            USB_SERIAL.println("Peer list full");
+        result = false;
+      } 
+      else if (addStatus == ESP_ERR_ESPNOW_NO_MEM) 
+      {
+        if (writeLogToSerial)
+          USB_SERIAL.println("Out of memory");
+        result = false;
+      } 
+      else if (addStatus == ESP_ERR_ESPNOW_EXIST) 
+      {
+        if (writeLogToSerial)
+          USB_SERIAL.println("Peer Exists");
+        result = true;
+      } 
+      else 
+      {
+        if (writeLogToSerial)
+          USB_SERIAL.println("Not sure what happened");
+        result = false;
+      }
+    }
+  }
+  else 
+  {
+    // No peer found to process
+    if (writeLogToSerial)
+      USB_SERIAL.println("No Peer found to process");
+    
+    M5.Lcd.println("No Peer found to process");
+    result = false;
+  }
+
+  return result;
+}
+
+void ESPNowDeletePeer(esp_now_peer_info_t& peer) 
+{
+  if (peer.channel != ESPNOW_NO_PEER_CHANNEL_FLAG)
+  {
+    esp_err_t delStatus = esp_now_del_peer(peer.peer_addr);
+    
+    if (writeLogToSerial)
+    {
+      USB_SERIAL.print("Peer Delete Status: ");
+      if (delStatus == ESP_OK) 
+      {
+        // Delete success
+        USB_SERIAL.println("ESPNowDeletePeer::Success");
+      } 
+      else if (delStatus == ESP_ERR_ESPNOW_NOT_INIT) 
+      {
+        // How did we get so far!!
+        USB_SERIAL.println("ESPNowDeletePeer::ESPNOW Not Init");
+      } 
+      else if (delStatus == ESP_ERR_ESPNOW_ARG) 
+      {
+        USB_SERIAL.println("ESPNowDeletePeer::Invalid Argument");
+      } 
+      else if (delStatus == ESP_ERR_ESPNOW_NOT_FOUND) 
+      {
+        USB_SERIAL.println("ESPNowDeletePeer::Peer not found.");
+      } 
+      else 
+      {
+        USB_SERIAL.println("Not sure what happened");
+      }
+    }
+  }
 }
  
