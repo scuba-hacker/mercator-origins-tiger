@@ -568,6 +568,42 @@ void fadeToBlackAndShutdown()
   M5.Axp.PowerOff();
 }
 
+bool cycleDisplays()
+{
+    bool changeMade = false;
+    
+    /* Original Screen Cycle:
+    // Screen cycle command
+    if (mode_ == 4) // countdown mode, next is clock
+    {
+      resetClock(); changeMade = true;
+    }
+    else if (mode_ == 3) // clock mode, next is show current target
+    {
+      resetCurrentTarget(); changeMade = true;
+    }
+    else if (mode_ == 5)     // show current target, next is count up timer
+    {
+      resetCountUpTimer(); changeMade = true;
+    }
+    else if (mode_ == 1) // countup timer mode, next is countdown
+    {
+      resetCountDownTimer(); changeMade = true;
+    }
+    */
+    
+    if (mode_ == 3) // clock mode, next is show current target
+    {
+      resetCurrentTarget(); changeMade = true;
+    }
+    else if (mode_ == 5)     // show current target, next is clock
+    {
+      resetClock(); changeMade = true;
+    }
+
+    return changeMade;
+}
+
 bool checkReedSwitches()
 {
   bool changeMade = false;
@@ -632,35 +668,8 @@ bool checkReedSwitches()
   {
     activationTime = lastPrimaryButtonPressLasted;
     reedSwitchTop = true;
-    
-    /* Original Screen Cycle:
-    // Screen cycle command
-    if (mode_ == 4) // countdown mode, next is clock
-    {
-      resetClock(); changeMade = true;
-    }
-    else if (mode_ == 3) // clock mode, next is show current target
-    {
-      resetCurrentTarget(); changeMade = true;
-    }
-    else if (mode_ == 5)     // show current target, next is count up timer
-    {
-      resetCountUpTimer(); changeMade = true;
-    }
-    else if (mode_ == 1) // countup timer mode, next is countdown
-    {
-      resetCountDownTimer(); changeMade = true;
-    }
-    */
-    
-    if (mode_ == 3) // clock mode, next is show current target
-    {
-      resetCurrentTarget(); changeMade = true;
-    }
-    else if (mode_ == 5)     // show current target, next is clock
-    {
-      resetClock(); changeMade = true;
-    }
+
+    changeMade = cycleDisplays();
   }
 
   // press second button for 5 seconds to attempt WiFi connect and enable OTA
@@ -784,9 +793,15 @@ void loop()
           break;
         }
         
+        case 'l':   // Bright light detected by Mako - switch to next screen
+        {
+          cycleDisplays();
+          break;
+        }
+
         default:
         {
-          
+          break;
         }
       }
     }
@@ -1339,7 +1354,7 @@ bool ESPNowScanForPeer(esp_now_peer_info_t& peer, const char* peerSSIDPrefix)
 {
   bool peerFound = false;
   
-  M5.Lcd.println("Scanning Networks...");
+  M5.Lcd.println("Scanning   Networks...");
   int8_t scanResults = WiFi.scanNetworks();
   M5.Lcd.println("Complete");
   
