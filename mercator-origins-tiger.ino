@@ -371,9 +371,6 @@ bool refreshTargetShown = false;
 
 void setup()
 { 
-  // force BST for now, so shows right time even when not online
-  // force Gozo time for now.
-  daylightOffset_sec = 3600; // BST
    
   M5.begin();
 
