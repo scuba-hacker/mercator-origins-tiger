@@ -1,6 +1,12 @@
 // M5StickC Nixie tube Clock: 2019.06.06 
 #include <M5StickCPlus.h>
 
+#include <memory.h>
+
+#include "MapScreen.h"
+
+std::unique_ptr<MapScreen> mapScreen;
+
 // rename the git file "mercator_secrets_template.c" to the filename below, filling in your wifi credentials etc.
 #include "mercator_secrets.c"
 
@@ -34,8 +40,8 @@ QueueHandle_t msgsReceivedQueue;
 bool ESPNowActive = false;
 
 // Nixie Clock graphics files
-#include "vfd_18x34.c"
-#include "vfd_35x67.c"
+// #include "vfd_18x34.c"
+// #include "vfd_35x67.c"
 
 const int SCREEN_LENGTH = 240;
 const int SCREEN_WIDTH = 135;
@@ -82,6 +88,13 @@ bool secondButtonIsPressed = false;
 uint32_t secondButtonPressedTime = 0;
 uint32_t lastSecondButtonPressLasted = 0;
 
+bool primaryButtonIndicatorNeedsClearing = false;
+bool secondButtonIndicatorNeedsClearing = false;
+
+double latitude=51.460015;
+double longitude=-0.548316;
+double heading=0.0;
+
 const char* ntpServer = "pool.ntp.org";
 const long  gmtOffset_sec = 0;        // timezone offset
 int   daylightOffset_sec = 0;   // DST offset
@@ -93,7 +106,7 @@ RTC_DateTypeDef RTC_DateStruct;
 const char* leakAlarmMsg = "\nWATER\n\nLEAK\n\nALARM";
 
 int mode_ = 3; // clock
-
+/*
 const uint8_t*n[] = { // vfd font 18x34
   vfd_18x34_0,vfd_18x34_1,vfd_18x34_2,vfd_18x34_3,vfd_18x34_4,
   vfd_18x34_5,vfd_18x34_6,vfd_18x34_7,vfd_18x34_8,vfd_18x34_9
@@ -106,7 +119,7 @@ const char *monthName[12] = {
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
 };
-
+*/
 #define USB_SERIAL Serial
 
 const int defaultBrightness = 100;
@@ -117,6 +130,7 @@ bool showDate=true;  //
 
 bool showPowerStats=false;
 
+void resetMap();
 void resetClock();
 void resetMicDisplay();
 
@@ -371,12 +385,13 @@ bool refreshTargetShown = false;
 
 void setup()
 { 
-   
   M5.begin();
 
   USB_SERIAL.begin(115200);
 
   pinMode(UNUSED_GPIO_36_PIN,INPUT);
+
+  mapScreen.reset(new MapScreen(&M5.Lcd,&M5));
 
   msgsReceivedQueue = xQueueCreate(queueLength,sizeof(rxQueueItemBuffer));
 
@@ -529,6 +544,12 @@ void resetCurrentTarget()
   mode_ = 5;
 }
 
+void resetMap()
+{
+  mapScreen->drawDiverOnBestFeaturesMapAtCurrentZoom(latitude, longitude, heading);
+  mode_ = 6;
+}
+
 void resetClock()
 {
   struct tm timeinfo;
@@ -593,8 +614,13 @@ bool cycleDisplays()
     {
       resetCurrentTarget(); changeMade = true;
     }
-    else if (mode_ == 5)     // show current target, next is clock
+    else if (mode_ == 5)     // show current target, next is map
     {
+      resetMap(); changeMade = true;
+    }
+    else if (mode_ == 6)     // show map, next is clock
+    {
+      mapScreen->clearMapPreserveZoom();
       resetClock(); changeMade = true;
     }
 
@@ -636,15 +662,20 @@ bool checkReedSwitches()
     M5.Lcd.setCursor(pressedPrimaryButtonX,pressedPrimaryButtonY);
     M5.Lcd.printf("%i",(millis()-primaryButtonPressedTime)/1000);
     M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+    primaryButtonIndicatorNeedsClearing=true;
   }
   else
   {
-    M5.Lcd.setTextSize(3);
-    M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
-    M5.Lcd.setCursor(pressedPrimaryButtonX,pressedPrimaryButtonY);
-    M5.Lcd.print(" ");
+    if (primaryButtonIndicatorNeedsClearing)
+    {
+      primaryButtonIndicatorNeedsClearing = false;
+      M5.Lcd.setTextSize(3);
+      M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+      M5.Lcd.setCursor(pressedPrimaryButtonX,pressedPrimaryButtonY);
+      M5.Lcd.print(" ");
+    }
   }
-  
+
   if (secondButtonIsPressed && millis()-secondButtonPressedTime > 250)
   {
     M5.Lcd.setTextSize(3);
@@ -652,13 +683,19 @@ bool checkReedSwitches()
     M5.Lcd.setCursor(pressedSecondButtonX,pressedSecondButtonY);
     M5.Lcd.printf("%i",(millis()-secondButtonPressedTime)/1000);
     M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+    secondButtonIndicatorNeedsClearing=true;
   }
   else
   {
-    M5.Lcd.setTextSize(3);
-    M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
-    M5.Lcd.setCursor(pressedSecondButtonX,pressedSecondButtonY);
-    M5.Lcd.print(" ");
+    if (secondButtonIndicatorNeedsClearing)
+    {
+      secondButtonIndicatorNeedsClearing = false;
+      
+      M5.Lcd.setTextSize(3);
+      M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+      M5.Lcd.setCursor(pressedSecondButtonX,pressedSecondButtonY);
+      M5.Lcd.print(" ");
+    }
   }
 
   if (p_primaryButton->wasReleasefor(100))
@@ -670,7 +707,11 @@ bool checkReedSwitches()
   }
 
   // press second button for 5 seconds to attempt WiFi connect and enable OTA
-  if (p_secondButton->wasReleasefor(5000))
+  if (p_secondButton->wasReleasefor(10000))
+  { 
+     esp_restart();
+  }
+  else if (p_secondButton->wasReleasefor(5000))
   { 
     activationTime = lastSecondButtonPressLasted;
     reedSwitchTop = false;
@@ -700,6 +741,12 @@ bool checkReedSwitches()
         countdownFrom = 59;
       changeMade = true;
     }
+    else if (mode_ == 6)    // toggle showing all features on the map
+    {
+      mapScreen->toggleDrawAllFeatures();
+      mapScreen->drawDiverOnBestFeaturesMapAtCurrentZoom(latitude, longitude, heading);
+      changeMade = true;
+    }
   }
   // press second button for 0.1 second...
   else if (p_secondButton->wasReleasefor(100))
@@ -723,6 +770,11 @@ bool checkReedSwitches()
       showDate=!showDate; changeMade = true;
       
       M5.Lcd.fillScreen(BLACK);
+    }
+    else if (mode_ == 6) // map mode
+    {
+      mapScreen->cycleZoom();
+      mapScreen->drawDiverOnBestFeaturesMapAtCurrentZoom(latitude, longitude, heading);
     }
   }
   
@@ -772,6 +824,7 @@ void publishToMakoReedActivation(const bool topReed, const uint32_t ms)
   }
 }
 
+
 void loop()
 { 
   shutdownIfUSBPowerOff();
@@ -796,6 +849,32 @@ void loop()
           break;
         }
 
+        case 'X':   // location, heading and current Target info.
+        {
+          // format: targetCode[7],lat,long,heading,targetText
+          
+          char targetCode[7];
+          
+          strncpy(targetCode,rxQueueItemBuffer+1,sizeof(targetCode));
+          
+          Serial.printf("targetCode: %s\n",targetCode);
+                    
+          memcpy(&latitude,  rxQueueItemBuffer+8,  8);
+          memcpy(&longitude, rxQueueItemBuffer+16, 8);
+          memcpy(&heading,   rxQueueItemBuffer+24, 8);
+
+          Serial.printf("latitude: %f\n",latitude);
+          Serial.printf("longitude: %f\n",longitude);
+          Serial.printf("heading: %f\n",heading);
+          
+          strncpy(currentTarget,rxQueueItemBuffer+32,sizeof(currentTarget));
+
+          Serial.printf("currentTarget: %s\n",currentTarget);
+
+          mapScreen->setTargetWaypointByLabel(targetCode);
+          if (mode_ == 6) // map on screen
+            mapScreen->drawDiverOnBestFeaturesMapAtCurrentZoom(latitude, longitude, heading);
+        }
         default:
         {
           break;
@@ -804,6 +883,7 @@ void loop()
     }
   }
   
+  if ( mode_ == 6) { vfd_6_map();}
   if ( mode_ == 5) { vfd_5_current_target();}
   if ( mode_ == 4) { vfd_4_line_countdown(countdownFrom);}   // mm,ss, optional dd mm
   if ( mode_ == 3 ){ vfd_3_line_clock();}   // hh,mm,ss, optional dd mm
@@ -822,6 +902,11 @@ void loop()
       break;
     }
   }
+}
+
+void vfd_6_map()
+{
+  // do nothing
 }
 
 void vfd_5_current_target()
@@ -953,6 +1038,7 @@ void draw_digit_text(int h1, int h2, int i1, int i2, int s1, int s2)
 
 void draw_digit_images(int h1, int h2, int i1, int i2, int s1, int s2)
 {
+  /*
   if (landscape_clock)
   {
     M5.Lcd.pushImage(  2,0,35,67, (uint16_t *)m[h1]);
@@ -981,6 +1067,7 @@ void draw_digit_images(int h1, int h2, int i1, int i2, int s1, int s2)
       M5.Lcd.pushImage(60,115,18,34, (uint16_t *)n[s2]);
     }
   }
+  */
 }
 
 void vfd_3_line_clock(){    // Clock mode - Hours, mins, secs with optional date
@@ -1042,6 +1129,7 @@ void vfd_1_line_countup(){  // Timer Mode - Minutes and Seconds, with optional d
 
 void drawDate()
 {
+  /*
   if (showDate)
   {
     int j1 = int(RTC_DateStruct.Month   / 10);
@@ -1064,6 +1152,7 @@ void drawDate()
 //      M5.Lcd.pushImage(105, 75,18,34, (uint16_t *)n[j2]);
     }
   }
+  */
 }
 
 void fade(){
@@ -1095,7 +1184,7 @@ void vfd_2_line(){      // Unused mode - full date and time with year.
   int i2 = int(RTC_TimeStruct.Minutes - i1*10 );
   int s1 = int(RTC_TimeStruct.Seconds / 10 );
   int s2 = int(RTC_TimeStruct.Seconds - s1*10 );
-   
+   /*
   M5.Lcd.pushImage(  0, 0,18,34, (uint16_t *)n[y1]); 
   M5.Lcd.pushImage( 19, 0,18,34, (uint16_t *)n[y2]);
   M5.Lcd.pushImage( 38, 0,18,34, (uint16_t *)n[y3]);
@@ -1115,7 +1204,7 @@ void vfd_2_line(){      // Unused mode - full date and time with year.
   M5.Lcd.drawPixel(108,54, ORANGE); M5.Lcd.drawPixel(108,64,ORANGE);
   M5.Lcd.pushImage(120,40,18,34, (uint16_t *)n[s1]);
   M5.Lcd.pushImage(140,40,18,34, (uint16_t *)n[s2]);
- 
+ */
   if ( i1 == 0 && i2 == 0 ){ fade();}
 }
 
