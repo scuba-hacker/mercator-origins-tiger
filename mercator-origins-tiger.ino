@@ -1,22 +1,28 @@
-// M5StickC Nixie tube Clock: 2019.06.06 
 #include <M5StickCPlus.h>
+
+#include <esp_now.h>
+#include <WiFi.h>
+#include <freertos/queue.h>
+
+#include <Update.h>             // OTA updates
+#include <AsyncTCP.h>           // OTA updates
+#include <ESPAsyncWebServer.h>  // OTA updates
+#include <AsyncElegantOTA.h>    // OTA updates
 
 #include <memory.h>
 
-#include "MapScreen.h"
+#include <time.h>
 
-std::unique_ptr<MapScreen> mapScreen;
+#include "MapScreen.h"
 
 // rename the git file "mercator_secrets_template.c" to the filename below, filling in your wifi credentials etc.
 #include "mercator_secrets.c"
 
 bool writeLogToSerial=false;
-
 bool goProButtonsPrimaryControl = true;
 
-#include <esp_now.h>
-#include <WiFi.h>
-#include <freertos/queue.h>
+const bool enableOTAServerAtStartup=false;
+const bool enableESPNow = !enableOTAServerAtStartup; // cannot have OTA server on regular wifi and espnow concurrently running
 
 // ************** ESPNow variables **************
 
@@ -34,21 +40,14 @@ bool isPairedWithMako = false;
 const int RESET_ESPNOW_SEND_RESULT = 0xFF;
 esp_err_t ESPNowSendResult=(esp_err_t)RESET_ESPNOW_SEND_RESULT;
 
-QueueHandle_t msgsReceivedQueue;
+char mako_espnow_buffer[256];
 
+QueueHandle_t msgsReceivedQueue;
 
 bool ESPNowActive = false;
 
-// Nixie Clock graphics files
-// #include "vfd_18x34.c"
-// #include "vfd_35x67.c"
-
 const int SCREEN_LENGTH = 240;
 const int SCREEN_WIDTH = 135;
-
-bool landscape_clock = false;
-
-bool text_clock = true;
 
 const uint8_t BUTTON_REED_TOP_PIN=25;
 const uint8_t BUTTON_REED_SIDE_PIN=0;
@@ -64,18 +63,10 @@ uint16_t sideCount = 0, topCount = 0;
 
 const uint16_t mode_label_y_offset = 170;
 
-#include <WiFi.h>
-#include "time.h" 
-
-#include <AsyncTCP.h>           // OTA updates
-#include <ESPAsyncWebServer.h>  // OTA updates
-#include <AsyncElegantOTA.h>    // OTA updates
 
 AsyncWebServer asyncWebServer(80);      // OTA updates
-const bool enableOTAServer=false; // OTA updates
-bool otaActiveListening=true;   // OTA updates toggle
 
-const bool enableESPNow = !enableOTAServer; // cannot have OTA server on regular wifi and espnow concurrently running
+bool otaActive=false;   // OTA updates toggle
 
 Button* p_primaryButton = NULL;
 Button* p_secondButton = NULL;
@@ -91,6 +82,7 @@ uint32_t lastSecondButtonPressLasted = 0;
 bool primaryButtonIndicatorNeedsClearing = false;
 bool secondButtonIndicatorNeedsClearing = false;
 
+std::unique_ptr<MapScreen> mapScreen;
 double latitude=51.460015;
 double longitude=-0.548316;
 double heading=0.0;
@@ -98,7 +90,6 @@ double heading=0.0;
 const char* ntpServer = "pool.ntp.org";
 const long  gmtOffset_sec = 0;        // timezone offset
 int   daylightOffset_sec = 0;   // DST offset
-const uint8_t max_NTP_connect_attempts=5;
 
 RTC_TimeTypeDef RTC_TimeStruct;
 RTC_DateTypeDef RTC_DateStruct;
@@ -106,100 +97,30 @@ RTC_DateTypeDef RTC_DateStruct;
 const char* leakAlarmMsg = "\nWATER\n\nLEAK\n\nALARM";
 
 int mode_ = 3; // clock
-/*
-const uint8_t*n[] = { // vfd font 18x34
-  vfd_18x34_0,vfd_18x34_1,vfd_18x34_2,vfd_18x34_3,vfd_18x34_4,
-  vfd_18x34_5,vfd_18x34_6,vfd_18x34_7,vfd_18x34_8,vfd_18x34_9
-  };
-const uint8_t*m[] = { // vfd font 35x67
-  vfd_35x67_0,vfd_35x67_1,vfd_35x67_2,vfd_35x67_3,vfd_35x67_4,
-  vfd_35x67_5,vfd_35x67_6,vfd_35x67_7,vfd_35x67_8,vfd_35x67_9
-  };
-const char *monthName[12] = {
-  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
-};
-*/
+
 #define USB_SERIAL Serial
 
 const int defaultBrightness = 100;
 
-int countdownFrom=59;
-bool haltCountdown=false;
-bool showDate=true;  // 
-
 bool showPowerStats=false;
-
-void resetMap();
-void resetClock();
-void resetMicDisplay();
-
-void resetCountDownTimer();
-void resetCountUpTimer();
 
 const float minimumUSBVoltage=2.0;
 long USBVoltageDropTime=0;
 long milliSecondsToWaitForShutDown=1000;
 
-bool setupOTAWebServer(const char* _ssid, const char* _password, const char* label, uint32_t timeout);
+char rxQueueItemBuffer[256];
+const uint8_t rxQueueLength=4;
+
+char currentTarget[256];
+bool refreshTargetShown = false;  
+
+void resetMap();
+void resetClock();
+
+const char* scanForKnownNetwork();
+bool setupOTAWebServer(const char* _ssid, const char* _password, const char* label, uint32_t timeout, bool wifiOnly = false);
 
 void updateButtonsAndBuzzer();
-
-void setRotationForClockStyle()
-{
-  if (landscape_clock)
-    M5.Lcd.setRotation(1);
-  else
-    M5.Lcd.setRotation(0);
-}
-
-void toggleOTAActiveAndWifiIfUSBPowerOff()
-{
-  if (M5.Axp.GetVBusVoltage() < minimumUSBVoltage)
-  {
-    if (USBVoltageDropTime == 0)
-      USBVoltageDropTime=millis();
-    else 
-    {
-      if (millis() > USBVoltageDropTime + milliSecondsToWaitForShutDown)
-      {
-       delay(1000);
-       M5.Lcd.fillScreen(TFT_ORANGE);
-       M5.Lcd.setCursor(0,0);
-       // flip ota on/off
-       if (otaActiveListening)
-       {
-         asyncWebServer.end();
-         M5.Lcd.printf("OTA Disabled");
-         otaActiveListening=false;
-         WiFi.disconnect();
-         M5.Lcd.printf("Wifi Disabled");
-         delay (1000);
-       }
-       else
-       {
-         asyncWebServer.begin();
-//         AsyncElegantOTA.begin(&asyncWebServer);    // Start AsyncElegantOTA
-         M5.Lcd.printf("OTA Enabled");
-         otaActiveListening=true;
-         M5.Lcd.printf("Enabling Wifi...");
-         
-         delay (1000);
-        if (!setupOTAWebServer(ssid_1, password_1, label_1, timeout_1))
-          if (!setupOTAWebServer(ssid_2, password_2, label_2, timeout_2))
-            setupOTAWebServer(ssid_3, password_3, label_3, timeout_3);       
-       }
-
-       M5.Lcd.fillScreen(TFT_BLACK);
-      }
-    }
-  }
-  else
-  {
-    if (USBVoltageDropTime != 0)
-      USBVoltageDropTime = 0;
-  }  
-}
 
 void shutdownIfUSBPowerOff()
 {
@@ -226,54 +147,16 @@ void shutdownIfUSBPowerOff()
 
 void  initialiseRTCfromNTP()
 {
+  const uint8_t max_NTP_connect_attempts=10;
+
   M5.Lcd.fillScreen(BLACK);
   M5.Lcd.setCursor(0,0);
 
-  if (!enableOTAServer)
-  {
-    //connect to WiFi
-    M5.Lcd.printf("Connect to\n%s\n", label_1);
-    int maxAttempts=15;
-    WiFi.begin(ssid_1, password_1);
-    while (WiFi.status() != WL_CONNECTED && --maxAttempts) 
-    {
-      delay(300);
-      M5.Lcd.print(".");
-    }
+  const bool wifiOnly = true;
 
-    if (maxAttempts == 0 && WiFi.status() != WL_CONNECTED)
-    {
-      M5.Lcd.fillScreen(BLACK);
-      M5.Lcd.setCursor(0,0);
-      
-      M5.Lcd.printf("Connect to\n%s\n", label_2);
-      int maxAttempts=15;
-      WiFi.begin(ssid_2, password_2);
-      while (WiFi.status() != WL_CONNECTED && --maxAttempts) 
-      {
-          delay(300);
-          M5.Lcd.print(".");
-      }
-    }
-
-    if (maxAttempts == 0 && WiFi.status() != WL_CONNECTED)
-    {
-      M5.Lcd.fillScreen(BLACK);
-      M5.Lcd.printf("Connect to\n%s\n", label_3);
-      M5.Lcd.setCursor(0,0);
-      int maxAttempts=15;
-      WiFi.begin(ssid_3, password_3);
-      while (WiFi.status() != WL_CONNECTED && --maxAttempts) 
-      {
-          delay(300);
-          M5.Lcd.print(".");
-      }
-    }
-  }
-
-  delay(1000);
-
-  if (WiFi.status() == WL_CONNECTED)
+  delay(500);
+  
+  if (WiFi.status() == WL_CONNECTED || connectToWiFiAndInitOTA(wifiOnly,3))
   {
     M5.Lcd.println("Wifi OK");
   
@@ -289,7 +172,7 @@ void  initialiseRTCfromNTP()
         USB_SERIAL.println("No time available (yet)");
         // Let RTC continue with existing settings
         M5.Lcd.println("Wait for NTP Time\n");
-        delay(1000);
+        delay(500);
       }
       else
       {
@@ -298,13 +181,13 @@ void  initialiseRTCfromNTP()
     }
 
     if(!getLocalTime(&timeinfo))
-    {
+    {      
       // Let RTC continue with existing settings
       M5.Lcd.println("No NTP Server\n");
     }
     else
     {
-      // USB_SERIAL.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
+      USB_SERIAL.println("NTP time received");
       // Use NTP to update RTC
     
       RTC_TimeTypeDef TimeStruct;
@@ -344,19 +227,10 @@ void  initialiseRTCfromNTP()
           // this doesn't deal with the exact changeover time for BST, but doesn't matter
           goto _initialiseTimeFromNTP;
         }
-          /*
-        day == 0 && date >= 25   TRUE
-        day == 1 && date >= 26   TRUE
-        day == 2 && date >= 27   TRUE
-        day == 3 && date >= 28   TRUE
-        day == 4 && date >= 29   TRUE
-        day == 5 && date >= 30   TRUE
-        day == 6 && date >= 31   TRUE
-        */
       }
     }
 
-    if (!enableOTAServer)
+    if (!enableOTAServerAtStartup)
     {
         //disconnect WiFi as it's no longer needed
         WiFi.disconnect(true);
@@ -372,16 +246,10 @@ void  initialiseRTCfromNTP()
 
   M5.Lcd.fillScreen(BLACK);
   
-  setRotationForClockStyle();
+  M5.Lcd.setRotation(0);
 
   resetClock();
 }
-
-char rxQueueItemBuffer[256];
-const uint8_t queueLength=4;
-
-char currentTarget[256];
-bool refreshTargetShown = false;  
 
 void setup()
 { 
@@ -389,11 +257,13 @@ void setup()
 
   USB_SERIAL.begin(115200);
 
+  strncpy(currentTarget,"  No\nTarget\n  Set\n From\n Mako",sizeof(currentTarget));
+
   pinMode(UNUSED_GPIO_36_PIN,INPUT);
 
   mapScreen.reset(new MapScreen(&M5.Lcd,&M5));
 
-  msgsReceivedQueue = xQueueCreate(queueLength,sizeof(rxQueueItemBuffer));
+  msgsReceivedQueue = xQueueCreate(rxQueueLength,sizeof(rxQueueItemBuffer));
 
   if (writeLogToSerial && msgsReceivedQueue == NULL)
   {
@@ -413,20 +283,15 @@ void setup()
     
   M5.Beep.setBeep(1200, 100);
 
-  setRotationForClockStyle();
-
   M5.Lcd.setTextSize(2);
   M5.Axp.ScreenBreath(defaultBrightness);
   
   USB_SERIAL.begin(115200);
 
-  if (enableOTAServer)
+  if (enableOTAServerAtStartup)
   {
-    if (!setupOTAWebServer(ssid_1, password_1, label_1, timeout_1))
-      if (!setupOTAWebServer(ssid_2, password_2, label_2, timeout_2))
-        setupOTAWebServer(ssid_3, password_3, label_3, timeout_3);
-
-    setRotationForClockStyle();
+    const bool wifiOnly = false;
+    connectToWiFiAndInitOTA(wifiOnly,3);
   }
 
   initialiseRTCfromNTP();
@@ -519,25 +384,6 @@ void readAndTestGoProReedSwitches()
   }
 }
 
-void resetCountUpTimer()
-{
-  M5.Lcd.fillScreen(BLACK);
-  RTC_TimeTypeDef TimeStruct;         // Hours, Minutes, Seconds 
-  TimeStruct.Hours   = 0;
-  TimeStruct.Minutes = 0;
-  TimeStruct.Seconds = 0;
-
-  M5.Rtc.SetTime(&TimeStruct);
-  mode_ = 1;
-}
-
-void resetCountDownTimer()
-{
-  haltCountdown=false;
-  resetCountUpTimer();
-  mode_ = 4;
-}
-
 void resetCurrentTarget()
 {
   refreshTargetShown = true;
@@ -552,26 +398,7 @@ void resetMap()
 
 void resetClock()
 {
-  struct tm timeinfo;
-  if(!getLocalTime(&timeinfo)){
-    USB_SERIAL.println("Failed to obtain time");
-    return;
-  }
-  
   M5.Lcd.fillScreen(BLACK);
-  RTC_TimeTypeDef TimeStruct;
-  TimeStruct.Hours   = timeinfo.tm_hour;
-  TimeStruct.Minutes = timeinfo.tm_min;
-  TimeStruct.Seconds = timeinfo.tm_sec;
-  M5.Rtc.SetTime(&TimeStruct);
-
-  RTC_DateTypeDef DateStruct;
-  DateStruct.Month = timeinfo.tm_mon+1;
-  DateStruct.Date = timeinfo.tm_mday;
-  DateStruct.Year = timeinfo.tm_year+1900;
-  DateStruct.WeekDay = timeinfo.tm_wday;
-  M5.Rtc.SetDate(&DateStruct);    
-
   mode_ = 3; // change back to 3
 }
 
@@ -586,42 +413,50 @@ void fadeToBlackAndShutdown()
   M5.Axp.PowerOff();
 }
 
-bool cycleDisplays()
+bool cycleDisplays(const bool refreshCurrentDisplay = false)
 {
-    bool changeMade = false;
-    
-    /* Original Screen Cycle:
-    // Screen cycle command
-    if (mode_ == 4) // countdown mode, next is clock
+    bool changeMade = true;
+
+    if (refreshCurrentDisplay)
     {
-      resetClock(); changeMade = true;
+      if (mode_ == 3) // clock mode
+      {
+        resetClock();
+      }
+      else if (mode_ == 5)     // show current target, next is map
+      {
+        resetCurrentTarget();
+      }
+      else if (mode_ == 6)     // show map, next is clock
+      {
+        resetMap();
+      }
+      else
+      {
+        USB_SERIAL.println("cycleDisplays Error: invalid mode_");
+        changeMade = false;
+      }      
     }
-    else if (mode_ == 3) // clock mode, next is show current target
+    else
     {
-      resetCurrentTarget(); changeMade = true;
-    }
-    else if (mode_ == 5)     // show current target, next is count up timer
-    {
-      resetCountUpTimer(); changeMade = true;
-    }
-    else if (mode_ == 1) // countup timer mode, next is countdown
-    {
-      resetCountDownTimer(); changeMade = true;
-    }
-    */
-    
-    if (mode_ == 3) // clock mode, next is show current target
-    {
-      resetCurrentTarget(); changeMade = true;
-    }
-    else if (mode_ == 5)     // show current target, next is map
-    {
-      resetMap(); changeMade = true;
-    }
-    else if (mode_ == 6)     // show map, next is clock
-    {
-      mapScreen->clearMapPreserveZoom();
-      resetClock(); changeMade = true;
+      if (mode_ == 3) // clock mode, next is show current target
+      {
+        resetCurrentTarget();
+      }
+      else if (mode_ == 5)     // show current target, next is map
+      {
+        resetMap();
+      }
+      else if (mode_ == 6)     // show map, next is clock
+      {
+        mapScreen->clearMapPreserveZoom();
+        resetClock();
+      }
+      else
+      {
+        USB_SERIAL.println("cycleDisplays Error: invalid mode_");
+        changeMade = false;
+      }
     }
 
     return changeMade;
@@ -638,22 +473,11 @@ bool checkReedSwitches()
 
   int pressedPrimaryButtonX, pressedPrimaryButtonY, pressedSecondButtonX, pressedSecondButtonY;
 
-  if (landscape_clock)
-  {   
-    pressedPrimaryButtonX = 210;
-    pressedPrimaryButtonY = 5;
-  
-    pressedSecondButtonX = 210;
-    pressedSecondButtonY = 110;
-  }
-  else
-  {   
-    pressedPrimaryButtonX = 110;
-    pressedPrimaryButtonY = 5; 
-  
-    pressedSecondButtonX = 5;
-    pressedSecondButtonY = 210;
-  }
+  pressedPrimaryButtonX = 110;
+  pressedPrimaryButtonY = 5; 
+
+  pressedSecondButtonX = 5;
+  pressedSecondButtonY = 210;
     
   if (primaryButtonIsPressed && millis()-primaryButtonPressedTime > 250)
   {
@@ -698,12 +522,13 @@ bool checkReedSwitches()
     }
   }
 
-  if (p_primaryButton->wasReleasefor(100))
+  if (p_primaryButton->wasReleasefor(100)) // show next display
   {
     activationTime = lastPrimaryButtonPressLasted;
     reedSwitchTop = true;
+    changeMade = true;
 
-    changeMade = cycleDisplays();
+    cycleDisplays();
   }
 
   // press second button for 5 seconds to attempt WiFi connect and enable OTA
@@ -717,15 +542,14 @@ bool checkReedSwitches()
     reedSwitchTop = false;
 
     TeardownESPNow();
-    
+        
     // enable OTA
-    if (!setupOTAWebServer(ssid_1, password_1, label_1, timeout_1))
-      if (!setupOTAWebServer(ssid_2, password_2, label_2, timeout_2))
-        setupOTAWebServer(ssid_3, password_3, label_3, timeout_3);
+    const bool wifiOnly = false;
+    connectToWiFiAndInitOTA(wifiOnly,3);
 
-    setRotationForClockStyle();
- 
     changeMade = true;
+    const bool refreshCurrentScreen=true;
+    cycleDisplays(refreshCurrentScreen);
   }
   // press second button for 1 second...
   else if (p_secondButton->wasReleasefor(1000))
@@ -733,15 +557,7 @@ bool checkReedSwitches()
     activationTime = lastSecondButtonPressLasted;
     reedSwitchTop = false;
 
-    // Screen modification command
-    if (mode_ == 4)       // Countdown mode, reduce timer by 15 mins
-    {
-      countdownFrom=countdownFrom-15;
-      if (countdownFrom <= 0)
-        countdownFrom = 59;
-      changeMade = true;
-    }
-    else if (mode_ == 6)    // toggle showing all features on the map
+    if (mode_ == 6)    // toggle showing all features on the map
     {
       mapScreen->toggleDrawAllFeatures();
       mapScreen->drawDiverOnBestFeaturesMapAtCurrentZoom(latitude, longitude, heading);
@@ -754,26 +570,9 @@ bool checkReedSwitches()
     activationTime = lastSecondButtonPressLasted;
     reedSwitchTop = false;
 
-    // Screen reset command
-    if (mode_ == 4)
+    if (mode_ == 6) // map mode - cycle zoom
     {
-      // revert the countdown timer to the start
-      resetCountDownTimer(); changeMade = true;
-    }
-    else if (mode_ == 1)
-    {
-      // revert the countup timer to the start 00:00
-      resetCountUpTimer(); changeMade = true;
-    }
-    else if (mode_ == 3) // clock mode
-    {
-      showDate=!showDate; changeMade = true;
-      
-      M5.Lcd.fillScreen(BLACK);
-    }
-    else if (mode_ == 6) // map mode
-    {
-      mapScreen->cycleZoom();
+      mapScreen->cycleZoom(); changeMade = true;
       mapScreen->drawDiverOnBestFeaturesMapAtCurrentZoom(latitude, longitude, heading);
     }
   }
@@ -787,18 +586,10 @@ bool checkReedSwitches()
   return changeMade;
 }
 
-char mako_espnow_buffer[256];
-
 void publishToMakoTestMessage(const char* testMessage)
 {     
   if (isPairedWithMako && ESPNow_mako_peer.channel == ESPNOW_CHANNEL)
   {
-    /*
-    memset(mako_espnow_buffer,0,sizeof(mako_espnow_buffer));
-    mako_espnow_buffer[0] = 'T';  // command T = Tiger
-    mako_espnow_buffer[1] = '\0';
-    strncpy(mako_espnow_buffer+1,testMessage,sizeof(mako_espnow_buffer)-2);
-*/
     snprintf(mako_espnow_buffer,sizeof(mako_espnow_buffer),"T%s",testMessage);
     if (writeLogToSerial)
     {
@@ -822,13 +613,15 @@ void publishToMakoReedActivation(const bool topReed, const uint32_t ms)
     }
     ESPNowSendResult = esp_now_send(ESPNow_mako_peer.peer_addr, (uint8_t*)mako_espnow_buffer, strlen(mako_espnow_buffer)+1);
   }
+  else
+  {
+    USB_SERIAL.println("ESPNow inactive - not sending ESP R msg to Mako...");
+  }
 }
-
 
 void loop()
 { 
   shutdownIfUSBPowerOff();
-//  toggleOTAActiveAndWifiIfUSBPowerOff();
 
   if (msgsReceivedQueue)
   {
@@ -885,10 +678,7 @@ void loop()
   
   if ( mode_ == 6) { vfd_6_map();}
   if ( mode_ == 5) { vfd_5_current_target();}
-  if ( mode_ == 4) { vfd_4_line_countdown(countdownFrom);}   // mm,ss, optional dd mm
   if ( mode_ == 3 ){ vfd_3_line_clock();}   // hh,mm,ss, optional dd mm
-  if ( mode_ == 2 ){ vfd_2_line();}   // yyyy,mm,dd,hh,mm,ss - not used.
-  if ( mode_ == 1 ){ vfd_1_line_countup();}   // mm,ss, optional dd mm
 
 //  readAndTestGoProReedSwitches();
   
@@ -917,7 +707,7 @@ void vfd_5_current_target()
     refreshTargetShown = false;
   }
 
-  if (ESPNowActive)
+  if (ESPNowActive && isPairedWithMako)
   {    
     M5.Lcd.setCursor(0,0);
     M5.Lcd.setTextSize(3);
@@ -929,7 +719,21 @@ void vfd_5_current_target()
     M5.Lcd.setCursor(0,0);
     M5.Lcd.setTextSize(3);
     M5.Lcd.setTextColor(TFT_RED);
-    M5.Lcd.println("  No\nTarget\n\nESPNow\nIs Off");    
+
+    if (!ESPNowActive)
+      M5.Lcd.println("  No\nTarget\n\nESPNow\nIs Off\n");
+    else
+      M5.Lcd.println("  No\nTarget\n\nESPNow\nNo Pair\n");
+    
+    if (otaActive)
+    {
+      M5.Lcd.setTextColor(TFT_GREEN);
+      M5.Lcd.println("OTA On\n");        
+    }
+    else
+    { 
+      M5.Lcd.println("OTA Off\n");
+    }
   }
 
   M5.Lcd.setCursor(0, mode_label_y_offset+10);
@@ -937,66 +741,10 @@ void vfd_5_current_target()
   M5.Lcd.print("Towards");
 }
 
-void vfd_4_line_countdown(const int countdownFrom){ // Countdown mode, minutes, seconds
-  int minutesRemaining = 0, secondsRemaining = 0;
-  
-  if (!haltCountdown)
-  {
-    M5.Rtc.GetTime(&RTC_TimeStruct);
-    M5.Rtc.GetDate(&RTC_DateStruct);
-    int minutesRemaining = countdownFrom - RTC_TimeStruct.Minutes;
-    int secondsRemaining = 59 - RTC_TimeStruct.Seconds;
-        
-    int i1 = int(minutesRemaining / 10 );
-    int i2 = int(minutesRemaining - i1*10 );
-    int s1 = int(secondsRemaining / 10 );
-    int s2 = int(secondsRemaining - s1*10 );
-
-    draw_digits(i1, i2, s1, s2, -1, -1);
-/*
-    M5.Lcd.pushImage(  2,6,35,67, (uint16_t *)m[i1]);
-    M5.Lcd.pushImage( 41,6,35,67, (uint16_t *)m[i2]);
-    M5.Lcd.drawPixel( 79,28, ORANGE); M5.Lcd.drawPixel( 79,54,ORANGE); 
-    M5.Lcd.drawPixel( 79,27, YELLOW); M5.Lcd.drawPixel( 79,53,YELLOW); 
-    M5.Lcd.pushImage( 83,6,35,67, (uint16_t *)m[s1]);
-    M5.Lcd.pushImage(121,6,35,67, (uint16_t *)m[s2]);
-*/
-    drawDate();
-
-    M5.Lcd.setTextSize(3);
-    M5.Lcd.setTextColor(TFT_CYAN, TFT_BLACK);
-    
-    M5.Lcd.setCursor(25, mode_label_y_offset);
-    M5.Lcd.print("Count");
-
-    M5.Lcd.setCursor(35, mode_label_y_offset+28);
-    M5.Lcd.print("Down");
-
-    if ( s1 == 0 && s2 == 0 ){ fade();}
-
-    if (minutesRemaining == 0 && secondsRemaining == 0)
-    {
-      haltCountdown=true;
-    }
-  }
-  else
-  {
-    fade();
-    fade();
-    fade();
-    fade();
-    fade();
-  }  
-}
-
 void draw_digits(int h1, int h2, int i1, int i2, int s1, int s2)
 {
-  if (text_clock)
-    draw_digit_text(h1,h2,i1,i2,s1,s2);
-  else
-    draw_digit_images(h1,h2,i1,i2,s1,s2);
+  draw_digit_text(h1,h2,i1,i2,s1,s2);
 }
-
 
 void draw_digit_text(int h1, int h2, int i1, int i2, int s1, int s2)
 {
@@ -1004,70 +752,23 @@ void draw_digit_text(int h1, int h2, int i1, int i2, int s1, int s2)
   M5.Lcd.setTextFont(0);
   M5.Lcd.setTextColor(TFT_ORANGE,TFT_BLACK);
 
-  if (landscape_clock)
-  {
-    M5.Lcd.setCursor(0,5);
-    M5.Lcd.printf(" %i%i:%i%i",h1,h2,i1,i2);
-    if (s1 != -1 && s2 != -1)
-    {
-      M5.Lcd.setTextSize(4);
-      M5.Lcd.setCursor(50,50);
-      M5.Lcd.printf("%i%i",s1,s2);
-    }
-  }
-  else
-  {
-    M5.Lcd.setCursor(5,5);
-    M5.Lcd.printf("%i%i",h1,h2);
 
-    M5.Lcd.setTextColor(TFT_ORANGE);
-    M5.Lcd.setCursor(M5.Lcd.getCursorX()-10,M5.Lcd.getCursorY());
-    M5.Lcd.printf(":\n",h1,h2);
-    M5.Lcd.setTextColor(TFT_ORANGE,TFT_BLACK);
-    M5.Lcd.setCursor(M5.Lcd.getCursorX()+5,M5.Lcd.getCursorY());
-    M5.Lcd.printf("%i%i",i1,i2);
-    
-    if (s1 != -1 && s2 != -1)
-    {
-      M5.Lcd.setTextSize(4);
-      M5.Lcd.setCursor(50,120);
-      M5.Lcd.printf("%i%i",s1,s2);
-    }
-  }
-}
+  M5.Lcd.setCursor(5,5);
+  M5.Lcd.printf("%i%i",h1,h2);
 
-void draw_digit_images(int h1, int h2, int i1, int i2, int s1, int s2)
-{
-  /*
-  if (landscape_clock)
+  M5.Lcd.setTextColor(TFT_ORANGE);
+  M5.Lcd.setCursor(M5.Lcd.getCursorX()-10,M5.Lcd.getCursorY());
+  M5.Lcd.printf(":\n",h1,h2);
+  M5.Lcd.setTextColor(TFT_ORANGE,TFT_BLACK);
+  M5.Lcd.setCursor(M5.Lcd.getCursorX()+5,M5.Lcd.getCursorY());
+  M5.Lcd.printf("%i%i",i1,i2);
+  
+  if (s1 != -1 && s2 != -1)
   {
-    M5.Lcd.pushImage(  2,0,35,67, (uint16_t *)m[h1]);
-    M5.Lcd.pushImage( 41,0,35,67, (uint16_t *)m[h2]);
-    M5.Lcd.drawPixel( 79,22, ORANGE); M5.Lcd.drawPixel( 79,48,ORANGE); 
-    M5.Lcd.drawPixel( 79,21, YELLOW); M5.Lcd.drawPixel( 79,47,YELLOW); 
-    M5.Lcd.pushImage( 83,0,35,67, (uint16_t *)m[i1]);
-    M5.Lcd.pushImage(121,0,35,67, (uint16_t *)m[i2]);
-    if (s1 != -1 && s2 != -1)
-    {
-      M5.Lcd.pushImage(120,45,18,34, (uint16_t *)n[s1]);
-      M5.Lcd.pushImage(140,45,18,34, (uint16_t *)n[s2]);
-    }
+    M5.Lcd.setTextSize(4);
+    M5.Lcd.setCursor(50,120);
+    M5.Lcd.printf("%i%i",s1,s2);
   }
-  else
-  {
-    M5.Lcd.pushImage(  2,0,35,67, (uint16_t *)m[h1]);
-    M5.Lcd.pushImage( 41,0,35,67, (uint16_t *)m[h2]);
-    M5.Lcd.drawPixel( 79,22, ORANGE); M5.Lcd.drawPixel( 79,48,ORANGE);
-    M5.Lcd.drawPixel( 79,21, YELLOW); M5.Lcd.drawPixel( 79,47,YELLOW); 
-    M5.Lcd.pushImage( 2,70,35,67, (uint16_t *)m[i1]);
-    M5.Lcd.pushImage(41,70,35,67, (uint16_t *)m[i2]);
-    if (s1 != -1 && s2 != -1)
-    {
-      M5.Lcd.pushImage(39,115,18,34, (uint16_t *)n[s1]);
-      M5.Lcd.pushImage(60,115,18,34, (uint16_t *)n[s2]);
-    }
-  }
-  */
 }
 
 void vfd_3_line_clock(){    // Clock mode - Hours, mins, secs with optional date
@@ -1092,8 +793,6 @@ void vfd_3_line_clock(){    // Clock mode - Hours, mins, secs with optional date
   {
     draw_digits(h1, h2, i1, i2, s1, s2);
 
-    drawDate();
-
     M5.Lcd.setTextSize(3);
     M5.Lcd.setTextColor(TFT_CYAN, TFT_BLACK);
     
@@ -1101,186 +800,8 @@ void vfd_3_line_clock(){    // Clock mode - Hours, mins, secs with optional date
     M5.Lcd.setTextColor(TFT_CYAN, TFT_BLACK);
     M5.Lcd.print("Time");
   }
-   
-  if ( s1 == 0 && s2 == 0 ){ fade();}
-}
- 
-void vfd_1_line_countup(){  // Timer Mode - Minutes and Seconds, with optional date
-  M5.Rtc.GetTime(&RTC_TimeStruct);
-  M5.Rtc.GetDate(&RTC_DateStruct);
-  int i1 = int(RTC_TimeStruct.Minutes / 10 );
-  int i2 = int(RTC_TimeStruct.Minutes - i1*10 );
-  int s1 = int(RTC_TimeStruct.Seconds / 10 );
-  int s2 = int(RTC_TimeStruct.Seconds - s1*10 );
-  
-  draw_digits(i1, i2, s1, s2, -1, -1);
-
-  drawDate();
-
-  M5.Lcd.setTextSize(3);
-  M5.Lcd.setTextColor(TFT_CYAN, TFT_BLACK);
-  M5.Lcd.setCursor(25, mode_label_y_offset);
-  M5.Lcd.print("Count");
-  M5.Lcd.setCursor(55, mode_label_y_offset+28);
-  M5.Lcd.print("Up");
-
-  if ( s1 == 0 && s2 == 0 ){ fade();}
 }
 
-void drawDate()
-{
-  /*
-  if (showDate)
-  {
-    int j1 = int(RTC_DateStruct.Month   / 10);
-    int j2 = int(RTC_DateStruct.Month   - j1*10 );
-    int d1 = int(RTC_DateStruct.Date    / 10 );
-    int d2 = int(RTC_DateStruct.Date    - d1*10 );
-
-    if (landscape_clock)
-    {
-      M5.Lcd.pushImage(35, 75,18,34, (uint16_t *)n[d1]);
-      M5.Lcd.pushImage(54, 75,18,34, (uint16_t *)n[d2]);
-      M5.Lcd.pushImage(85, 75 ,18,34, (uint16_t *)n[j1]);
-      M5.Lcd.pushImage(105, 75,18,34, (uint16_t *)n[j2]);
-    }
-    else
-    {
-//      M5.Lcd.pushImage(35, 75,18,34, (uint16_t *)n[d1]);
-//     M5.Lcd.pushImage(54, 75,18,34, (uint16_t *)n[d2]);
-//      M5.Lcd.pushImage(85, 75 ,18,34, (uint16_t *)n[j1]);
-//      M5.Lcd.pushImage(105, 75,18,34, (uint16_t *)n[j2]);
-    }
-  }
-  */
-}
-
-void fade(){
-  for (int i=0;i<100;i=i+15){M5.Axp.ScreenBreath(i);delay(25);}
-  for (int i=100;i>0;i=i-15){M5.Axp.ScreenBreath(i);delay(25);}
-  M5.Axp.ScreenBreath(defaultBrightness);
-}
-
-void vfd_2_line(){      // Unused mode - full date and time with year.
-  M5.Rtc.GetTime(&RTC_TimeStruct);
-  M5.Rtc.GetDate(&RTC_DateStruct);
-  //USB_SERIAL.printf("Data: %04d-%02d-%02d\n",RTC_DateStruct.Year,RTC_DateStruct.Month,RTC_DateStruct.Date);
-  //USB_SERIAL.printf("Week: %d\n",RTC_DateStruct.WeekDay);
-  //USB_SERIAL.printf("Time: %02d : %02d : %02d\n",RTC_TimeStruct.Hours,RTC_TimeStruct.Minutes,RTC_TimeStruct.Seconds);
-  // Data: 2019-06-06
-  // Week: 0
-  // Time: 09 : 55 : 26
-  int y1 = int(RTC_DateStruct.Year    / 1000 );
-  int y2 = int((RTC_DateStruct.Year   - y1*1000 ) / 100 );
-  int y3 = int((RTC_DateStruct.Year   - y1*1000 - y2*100 ) / 10 );
-  int y4 = int(RTC_DateStruct.Year    - y1*1000 - y2*100 - y3*10 );
-  int j1 = int(RTC_DateStruct.Month   / 10);
-  int j2 = int(RTC_DateStruct.Month   - j1*10 );
-  int d1 = int(RTC_DateStruct.Date    / 10 );
-  int d2 = int(RTC_DateStruct.Date    - d1*10 );
-  int h1 = int(RTC_TimeStruct.Hours   / 10) ;
-  int h2 = int(RTC_TimeStruct.Hours   - h1*10 );
-  int i1 = int(RTC_TimeStruct.Minutes / 10 );
-  int i2 = int(RTC_TimeStruct.Minutes - i1*10 );
-  int s1 = int(RTC_TimeStruct.Seconds / 10 );
-  int s2 = int(RTC_TimeStruct.Seconds - s1*10 );
-   /*
-  M5.Lcd.pushImage(  0, 0,18,34, (uint16_t *)n[y1]); 
-  M5.Lcd.pushImage( 19, 0,18,34, (uint16_t *)n[y2]);
-  M5.Lcd.pushImage( 38, 0,18,34, (uint16_t *)n[y3]);
-  M5.Lcd.pushImage( 57, 0,18,34, (uint16_t *)n[y4]);
-  M5.Lcd.drawPixel( 77,13, ORANGE); M5.Lcd.drawPixel( 77,23,ORANGE);
-  M5.Lcd.pushImage( 80, 0,18,34, (uint16_t *)n[j1]);
-  M5.Lcd.pushImage( 99, 0,18,34, (uint16_t *)n[j2]);
-  M5.Lcd.drawPixel(118,13, ORANGE); M5.Lcd.drawPixel(119,23,ORANGE);
-  M5.Lcd.pushImage(120, 0,18,34, (uint16_t *)n[d1]);
-  M5.Lcd.pushImage(140, 0,18,34, (uint16_t *)n[d2]);
-                                                    
-  M5.Lcd.pushImage( 00,40,18,34, (uint16_t *)n[h1]);
-  M5.Lcd.pushImage( 20,40,18,34, (uint16_t *)n[h2]);
-  M5.Lcd.drawPixel( 48,54, ORANGE); M5.Lcd.drawPixel( 48,64,ORANGE); 
-  M5.Lcd.pushImage( 60,40,18,34, (uint16_t *)n[i1]);
-  M5.Lcd.pushImage( 80,40,18,34, (uint16_t *)n[i2]);
-  M5.Lcd.drawPixel(108,54, ORANGE); M5.Lcd.drawPixel(108,64,ORANGE);
-  M5.Lcd.pushImage(120,40,18,34, (uint16_t *)n[s1]);
-  M5.Lcd.pushImage(140,40,18,34, (uint16_t *)n[s2]);
- */
-  if ( i1 == 0 && i2 == 0 ){ fade();}
-}
-
-bool setupOTAWebServer(const char* _ssid, const char* _password, const char* label, uint32_t timeout)
-{
-  bool forcedCancellation = false;
-
-  M5.Lcd.setCursor(0, 0);
-  M5.Lcd.fillScreen(TFT_BLACK);
-  M5.Lcd.setTextSize(2);
-  bool connected = false;
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(_ssid, _password);
-
-  // Wait for connection for max of timeout/1000 seconds
-  M5.Lcd.printf("%s Wifi", label);
-  int count = timeout / 500;
-  while (WiFi.status() != WL_CONNECTED && --count > 0)
-  {
-    // check for cancellation button - top button.
-    updateButtonsAndBuzzer();
-
-    if (p_primaryButton->isPressed()) // cancel connection attempts
-    {
-      forcedCancellation = true;
-      break;
-    }
-
-    M5.Lcd.print(".");
-    delay(500);
-  }
-  M5.Lcd.print("\n\n");
-
-  if (WiFi.status() == WL_CONNECTED)
-  {
-    asyncWebServer.on("/", HTTP_GET, [](AsyncWebServerRequest * request) {
-      request->send(200, "text/plain", "To upload firmware use /update");
-    });
-
-    AsyncElegantOTA.begin(&asyncWebServer);    // Start AsyncElegantOTA
-    asyncWebServer.begin();    
-    M5.Lcd.setRotation(0);
-    
-    M5.Lcd.fillScreen(TFT_BLACK);
-    M5.Lcd.setCursor(0,155);
-    M5.Lcd.setTextSize(2);
-    M5.Lcd.printf("%s\n\n",WiFi.localIP().toString());
-    M5.Lcd.println(WiFi.macAddress());
-    connected = true;
-
-    M5.Lcd.qrcode("http://"+WiFi.localIP().toString()+"/update",0,0,135);
-
-    connected = true;
-
-    updateButtonsAndBuzzer();
-
-    if (p_secondButton->isPressed())
-    {
-      M5.Lcd.print("\n\n20\nsecond pause");
-      delay(20000);
-    }
-  }
-  else
-  {
-    if (forcedCancellation)
-      M5.Lcd.print("\n     Cancelled\n Connection Attempts");
-    else
-      M5.Lcd.print("No Connection");
-  }
-
-  delay(5000);
-
-  M5.Lcd.fillScreen(TFT_BLACK);
-
-  return connected;
-}
 
 void updateButtonsAndBuzzer()
 {
@@ -1326,13 +847,8 @@ void updateButtonsAndBuzzer()
   }
 }
 
-char ESPNowbuffer[256];
-
 void configAndStartUpESPNow()
-{
-  if (writeLogToSerial)
-    USB_SERIAL.println("ESPNow/Basic Example");
-  
+{  
   //Set device in AP mode to begin with
   WiFi.mode(WIFI_AP);
   
@@ -1435,14 +951,202 @@ bool TeardownESPNow()
   return result;
 }
 
+const char* scanForKnownNetwork() // return first known network found
+{
+  const char* network = nullptr;
+
+  M5.Lcd.println("Scan WiFi\nSSIDs...");
+  int8_t scanResults = WiFi.scanNetworks();
+  M5.Lcd.println("Complete");
+
+  if (scanResults != 0)
+  {
+    for (int i = 0; i < scanResults; ++i) 
+    {
+      // Print SSID and RSSI for each device found
+      String SSID = WiFi.SSID(i);
+
+      delay(10);
+      
+      // Check if the current device starts with the peerSSIDPrefix
+      if (strcmp(SSID.c_str(), ssid_1) == 0)
+        network=ssid_1;
+      else if (strcmp(SSID.c_str(), ssid_2) == 0)
+        network=ssid_2;
+      else if (strcmp(SSID.c_str(), ssid_3) == 0)
+        network=ssid_3;
+
+      if (network)
+        break;
+    }    
+  }
+
+  if (network)
+  {
+    if (writeLogToSerial)
+      USB_SERIAL.printf("Found:\n%s\n",network);
+    else
+      M5.Lcd.printf("Found:\n%s",network);
+  }
+  else
+  {
+    if (writeLogToSerial)
+      USB_SERIAL.println("No networks Found\n");
+    else
+      M5.Lcd.println("None\nFound");
+  }
+
+  // clean up ram
+  WiFi.scanDelete();
+
+  return network;
+}
+
+bool setupOTAWebServer(const char* _ssid, const char* _password, const char* label, uint32_t timeout, bool wifiOnly)
+{
+  if (wifiOnly && WiFi.status() == WL_CONNECTED)
+  {
+    if (writeLogToSerial)
+      USB_SERIAL.printf("setupOTAWebServer: attempt to connect wifiOnly, already connected - otaActive=%i\n",otaActive);
+
+    return true;
+  }
+
+  if (writeLogToSerial)
+    USB_SERIAL.printf("setupOTAWebServer: attempt to connect %s wifiOnly=%i when otaActive=%i\n",_ssid, wifiOnly,otaActive);
+
+  bool forcedCancellation = false;
+
+  M5.Lcd.setCursor(0, 0);
+  M5.Lcd.fillScreen(TFT_BLACK);
+  M5.Lcd.setTextSize(2);
+  bool connected = false;
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(_ssid, _password);
+
+  // Wait for connection for max of timeout/1000 seconds
+  M5.Lcd.printf("%s Wifi", label);
+  int count = timeout / 500;
+  while (WiFi.status() != WL_CONNECTED && --count > 0)
+  {
+    // check for cancellation button - top button.
+    updateButtonsAndBuzzer();
+
+    if (p_primaryButton->isPressed()) // cancel connection attempts
+    {
+      forcedCancellation = true;
+      break;
+    }
+
+    M5.Lcd.print(".");
+    delay(500);
+  }
+  M5.Lcd.print("\n\n");
+
+  if (WiFi.status() == WL_CONNECTED )
+  {
+    if (wifiOnly == false && !otaActive)
+    {
+      if (writeLogToSerial)
+        USB_SERIAL.println("setupOTAWebServer: WiFi connected ok, starting up OTA");
+
+      asyncWebServer.on("/", HTTP_GET, [](AsyncWebServerRequest * request) {
+        request->send(200, "text/plain", "To upload firmware use /update");
+      });
+  
+      AsyncElegantOTA.begin(&asyncWebServer);    // Start AsyncElegantOTA
+      asyncWebServer.begin();    
+      M5.Lcd.setRotation(0);
+      
+      M5.Lcd.fillScreen(TFT_BLACK);
+      M5.Lcd.setCursor(0,155);
+      M5.Lcd.setTextSize(2);
+      M5.Lcd.printf("%s\n\n",WiFi.localIP().toString());
+      M5.Lcd.println(WiFi.macAddress());
+      connected = true;
+      otaActive = true;
+  
+      M5.Lcd.qrcode("http://"+WiFi.localIP().toString()+"/update",0,0,135);
+  
+      delay(2000);
+
+      connected = true;
+  
+      updateButtonsAndBuzzer();
+  
+      if (p_secondButton->isPressed())
+      {
+        M5.Lcd.print("\n\n20\nsecond pause");
+        delay(20000);
+      }
+    }
+  }
+  else
+  {
+    if (forcedCancellation)
+      M5.Lcd.print("\nCancelled\nConnect\nAttempts");
+    else
+    {
+      if (writeLogToSerial)
+        USB_SERIAL.printf("setupOTAWebServer: WiFi failed to connect %s\n",_ssid);
+
+      M5.Lcd.print("No Connect");
+    }
+  }
+
+  M5.Lcd.fillScreen(TFT_BLACK);
+
+  return connected;
+}
+
+
+bool connectToWiFiAndInitOTA(const bool wifiOnly, int repeatScanAttempts)
+{
+  if (wifiOnly && WiFi.status() == WL_CONNECTED)
+    return true;
+
+  M5.Lcd.setCursor(0, 0);
+  M5.Lcd.fillScreen(TFT_BLACK);
+  M5.Lcd.setTextSize(2);
+
+  while (repeatScanAttempts-- &&
+         (WiFi.status() != WL_CONNECTED ||
+          WiFi.status() == WL_CONNECTED && wifiOnly == false && otaActive == false ) )
+  {
+    const char* network = scanForKnownNetwork();
+  
+    int connectToFoundNetworkAttempts = 3;
+    const int repeatDelay = 1000;
+  
+    if (strcmp(network,ssid_1) == 0)
+    {
+      while (connectToFoundNetworkAttempts-- && !setupOTAWebServer(ssid_1, password_1, label_1, timeout_1, wifiOnly))
+        delay(repeatDelay);
+    }
+    else if (strcmp(network,ssid_2) == 0)
+    {
+      while (connectToFoundNetworkAttempts-- && !setupOTAWebServer(ssid_2, password_2, label_2, timeout_2, wifiOnly))
+        delay(repeatDelay);
+    }
+    else if (strcmp(network,ssid_3) == 0)
+    {
+      while (connectToFoundNetworkAttempts-- && !setupOTAWebServer(ssid_3, password_3, label_3, timeout_3, wifiOnly))
+        delay(repeatDelay);
+    }
+    
+    delay(1000);
+  }
+
+  return WiFi.status() == WL_CONNECTED;
+}
+
 // Scan for peers in AP mode
-bool ESPNowScanForPeer(esp_now_peer_info_t& peer, const char* peerSSIDPrefix)
+bool ESPNowScanForPeer(esp_now_peer_info_t& peer, const char* peerSSIDPrefix, const bool suppressPeerFoundMsg = true)
 {
   bool peerFound = false;
   
-  M5.Lcd.println("Scanning   Networks...");
+  M5.Lcd.print("Scan ESP...");
   int8_t scanResults = WiFi.scanNetworks();
-  M5.Lcd.println("Complete");
   
   // reset on each scan 
   memset(&peer, 0, sizeof(peer));
@@ -1517,19 +1221,22 @@ bool ESPNowScanForPeer(esp_now_peer_info_t& peer, const char* peerSSIDPrefix)
     }
   }
 
-  if (peerFound) 
+  if (!suppressPeerFoundMsg)
   {
-    M5.Lcd.println("Peer Found");
-    if (writeLogToSerial)
-      USB_SERIAL.println("Peer Found, processing..");
-  } 
-  else 
-  {
-    M5.Lcd.println("Peer Not Found");
-    if (writeLogToSerial)
-      USB_SERIAL.println("Peer Not Found, trying again.");
+    if (peerFound)
+    {
+      M5.Lcd.println("Peer Found");
+      if (writeLogToSerial)
+        USB_SERIAL.println("Peer Found, processing..");
+    } 
+    else 
+    {
+      M5.Lcd.println("Peer Not Found");
+      if (writeLogToSerial)
+        USB_SERIAL.println("Peer Not Found, trying again.");
+    }
   }
-  
+    
   // clean up ram
   WiFi.scanDelete();
 
@@ -1547,12 +1254,16 @@ bool pairWithPeer(esp_now_peer_info_t& peer, const char* peerSSIDPrefix, int max
     if (result && peer.channel == ESPNOW_CHANNEL)
     { 
       isPaired = ESPNowManagePeer(peer);
+      M5.Lcd.setTextColor(TFT_GREEN);
       M5.Lcd.printf("%s Pair ok\n",peerSSIDPrefix);
+      M5.Lcd.setTextColor(TFT_WHITE);
     }
     else
     {
       peer.channel = ESPNOW_NO_PEER_CHANNEL_FLAG;
+      M5.Lcd.setTextColor(TFT_RED);
       M5.Lcd.printf("%s Pair fail\n",peerSSIDPrefix);
+      M5.Lcd.setTextColor(TFT_WHITE);
     }
   }
 
